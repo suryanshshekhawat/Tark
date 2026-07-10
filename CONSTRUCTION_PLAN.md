@@ -24,7 +24,7 @@ This principle is the entire pitch. Every architecture decision below exists to 
 
 ## 2. Outcome we're building toward
 
-A web app where a user pastes a number-theory proof (LaTeX or plain text) and gets back, live:
+A web app where a user pastes a number-theory proof (LaTeX only) and gets back, live:
 - A decomposition into numbered steps with dependencies.
 - Per-step verdict: `VERIFIED (Lean)`, `VERIFIED (Computational)`, `UNVERIFIED`, or `REFUTED`.
 - The actual Lean compiler output / SymPy check output as evidence for each `VERIFIED`/`REFUTED` step — not Claude's word for it.
@@ -44,9 +44,9 @@ A web app where a user pastes a number-theory proof (LaTeX or plain text) and ge
 
 ## 4. Scope
 
-- **Domain:** elementary number theory (divisibility, primes, gcd/lcm, modular arithmetic, irrationality proofs, basic Diophantine claims) — the poster's own √2/gcd example is a good north star for what "in scope" looks like.
+- **Domain:** number theory (divisibility, primes, gcd/lcm, modular arithmetic, irrationality proofs, basic Diophantine claims) — the poster's own √2/gcd example is a good north star for what "in scope" looks like.
 - **Input:** LaTeX only. Not plaintext, not "natural language proof" — the user pastes a reasonably well-formed LaTeX proof (this is a hard scope cut from the poster, which advertised plaintext/NL input too; v1 does not support that). See §4a for what "valid enough" means and how we handle the rest.
-- **Output:** structured step-by-step report rendered live in the browser, **interactively linked back to the source LaTeX** (see §10a), + downloadable report (JSON + human-readable markdown/PDF).
+- **Output:** structured step-by-step report rendered live in the browser, **interactively linked back to the source LaTeX**, would ne nice if we could sed a scrollable element in the browser of the latex being rendered with coloured highlights of red green and yellow where side panels or hovering could show what has been verified and red shows negative verification and yellow shows some kind of issue (see §10a), + downloadable report (JSON + human-readable markdown/PDF).
 
 ### 4a. Input validation & exception handling
 

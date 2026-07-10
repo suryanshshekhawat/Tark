@@ -1,0 +1,22 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+*.pyc
+
+# Env / secrets
+.env
+backend/.env
+
+# Lean / Mathlib build artifacts and package cache (huge; fetched via `lake exe cache get`)
+tark_lean/.lake/
+tark_lean/.tark_scratch/
+
+# Node (frontend has its own .gitignore too)
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
