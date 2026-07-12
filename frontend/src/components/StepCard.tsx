@@ -30,16 +30,15 @@ export function StepCard({ step }: { step: Step }) {
 
       {step.evidence && (
         <details className="evidence">
-          <summary>Raw verifier evidence</summary>
+          <summary>Evidence</summary>
           <pre>{step.evidence.raw_output}</pre>
         </details>
       )}
 
       {step.claude_notes.length > 0 && (
         <div className="claude-notes">
-          <div className="claude-notes-label">Claude's notes (unverified opinion)</div>
           {step.claude_notes.map((note, i) => (
-            <div key={i} className={`claude-note claude-note-${note.type}`}>
+            <div key={i} className={`claude-note claude-note-${note.type}`} title="Unverified opinion">
               {note.text}
             </div>
           ))}

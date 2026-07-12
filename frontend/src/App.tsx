@@ -1,12 +1,24 @@
 import { useMemo, useState } from "react";
 import "./App.css";
 import { streamVerify } from "./api";
+import { LatexPreview } from "./components/LatexPreview";
+import { SourcePane } from "./components/SourcePane";
 import { StepCard } from "./components/StepCard";
+import { StepSidebar } from "./components/StepSidebar";
 import { SummaryHeader } from "./components/SummaryHeader";
 import type { AutoRepair, IngestError, Report, Step } from "./types";
 
-// Steps stream in completion order, not proof order — sort S2 before S10
-// for display (plain string sort would put S10 first).
+const EXAMPLE_PROOF = String.raw`Suppose, for contradiction, that $\sqrt{2}$ is rational. Then
+$\sqrt{2} = p/q$ for some integers $p, q$ with $\gcd(p, q) = 1$.
+Squaring both sides gives $p^2 = 2q^2$, so $p^2$ is even, so $p$ is even.
+Write $p = 2k$. Then $4k^2 = 2q^2$, so $q^2 = 2k^2$, so $q$ is also even.
+But this contradicts $\gcd(p, q) = 1$. Hence $\sqrt{2}$ is irrational.`;
+
+type Stage = "input" | "preview" | "result";
+type Status = "idle" | "streaming" | "error" | "done";
+type ViewMode = "list" | "source";
+type FocusOrigin = "source" | "sidebar" | null;
+
 function stepSortKey(id: string): [string, number] {
   const match = id.match(/^(\D*)(\d+)$/);
   if (match) return [match[1], parseInt(match[2], 10)];
@@ -21,32 +33,41 @@ function sortSteps(steps: Step[]): Step[] {
   });
 }
 
-const EXAMPLE_PROOF = String.raw`Suppose, for contradiction, that $\sqrt{2}$ is rational. Then
-$\sqrt{2} = p/q$ for some integers $p, q$ with $\gcd(p, q) = 1$.
-Squaring both sides gives $p^2 = 2q^2$, so $p^2$ is even, so $p$ is even.
-Write $p = 2k$. Then $4k^2 = 2q^2$, so $q^2 = 2k^2$, so $q$ is also even.
-But this contradicts $\gcd(p, q) = 1$. Hence $\sqrt{2}$ is irrational.`;
-
-type Status = "idle" | "streaming" | "error" | "done";
-
 function App() {
   const [latex, setLatex] = useState("");
+  const [stage, setStage] = useState<Stage>("input");
   const [status, setStatus] = useState<Status>("idle");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [steps, setSteps] = useState<Step[]>([]);
   const [autoRepairs, setAutoRepairs] = useState<AutoRepair[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [ingestError, setIngestError] = useState<IngestError | null>(null);
   const [pipelineError, setPipelineError] = useState<string | null>(null);
+  const [focusedStepId, setFocusedStepId] = useState<string | null>(null);
+  const [focusOrigin, setFocusOrigin] = useState<FocusOrigin>(null);
 
   const sortedSteps = useMemo(() => sortSteps(steps), [steps]);
 
+  function focusFromSource(id: string) {
+    setFocusedStepId(id);
+    setFocusOrigin("source");
+  }
+
+  function focusFromSidebar(id: string) {
+    setFocusedStepId(id);
+    setFocusOrigin("sidebar");
+  }
+
   async function handleVerify() {
+    setStage("result");
     setStatus("streaming");
     setSteps([]);
     setAutoRepairs([]);
     setReport(null);
     setIngestError(null);
     setPipelineError(null);
+    setViewMode("list");
+    setFocusedStepId(null);
 
     try {
       await streamVerify(latex, {
@@ -80,74 +101,129 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1>Tark</h1>
-        <p className="tagline">Claude proposes. Verifiers dispose.</p>
       </header>
 
-      <section className="input-screen">
-        <textarea
-          placeholder="Paste a LaTeX proof (not plain text — LaTeX only)."
-          value={latex}
-          onChange={(e) => setLatex(e.target.value)}
-          rows={10}
+      {stage === "input" && (
+        <section className="input-screen">
+          <textarea
+            placeholder="Paste a LaTeX proof"
+            value={latex}
+            onChange={(e) => setLatex(e.target.value)}
+            rows={10}
+          />
+          <div className="input-actions">
+            <button onClick={() => setStage("preview")} disabled={!latex.trim()}>
+              Preview
+            </button>
+            <button className="secondary" onClick={() => setLatex(EXAMPLE_PROOF)}>
+              Load example
+            </button>
+          </div>
+        </section>
+      )}
+
+      {stage === "preview" && (
+        <LatexPreview
+          latex={latex}
+          onEdit={() => setStage("input")}
+          onConfirm={handleVerify}
         />
-        <div className="input-actions">
-          <button onClick={handleVerify} disabled={status === "streaming" || !latex.trim()}>
-            {status === "streaming" ? "Verifying..." : "Verify"}
-          </button>
-          <button className="secondary" onClick={() => setLatex(EXAMPLE_PROOF)}>
-            Load example (√2 irrational)
-          </button>
-        </div>
-      </section>
+      )}
 
-      {ingestError && (
-        <section className="ingest-error">
-          <div className="ingest-error-type">{ingestError.error_type}</div>
-          <p>{ingestError.message}</p>
-          {ingestError.location && (
-            <p className="ingest-error-location">
-              line {ingestError.location.line}, offset {ingestError.location.char_offset}
-            </p>
+      {stage === "result" && (
+        <>
+          {ingestError && (
+            <section className="ingest-error">
+              <div className="ingest-error-type">{ingestError.error_type}</div>
+              <p>{ingestError.message}</p>
+              {ingestError.location && (
+                <p className="ingest-error-location">
+                  line {ingestError.location.line}, offset {ingestError.location.char_offset}
+                </p>
+              )}
+            </section>
           )}
-        </section>
-      )}
 
-      {pipelineError && (
-        <section className="ingest-error">
-          <div className="ingest-error-type">pipeline error</div>
-          <p>{pipelineError}</p>
-        </section>
-      )}
+          {pipelineError && (
+            <section className="ingest-error">
+              <p>{pipelineError}</p>
+            </section>
+          )}
 
-      {autoRepairs.length > 0 && (
-        <section className="auto-repairs">
-          {autoRepairs.map((r, i) => (
-            <div key={i} className="auto-repair">
-              Auto-repaired: {r.issue} — {r.action} (confidence: {r.confidence})
+          {autoRepairs.length > 0 && (
+            <section className="auto-repairs">
+              {autoRepairs.map((r, i) => (
+                <div key={i} className="auto-repair">
+                  Auto-repaired: {r.issue} — {r.action}
+                </div>
+              ))}
+            </section>
+          )}
+
+          {report && (
+            <div className="result-header">
+              <SummaryHeader report={report} />
+              <div className="view-toggle">
+                <button
+                  className={viewMode === "list" ? "active" : ""}
+                  onClick={() => setViewMode("list")}
+                >
+                  List
+                </button>
+                <button
+                  className={viewMode === "source" ? "active" : ""}
+                  onClick={() => setViewMode("source")}
+                >
+                  Source
+                </button>
+              </div>
             </div>
-          ))}
-        </section>
-      )}
+          )}
 
-      {report && <SummaryHeader report={report} />}
+          {status === "streaming" && !report && <p className="status-line">Verifying…</p>}
 
-      {sortedSteps.length > 0 && (
-        <section className="report-view">
-          {sortedSteps.map((step) => (
-            <StepCard key={step.id} step={step} />
-          ))}
-        </section>
-      )}
+          {viewMode === "list" && sortedSteps.length > 0 && (
+            <section className="report-view">
+              {sortedSteps.map((step) => (
+                <StepCard key={step.id} step={step} />
+              ))}
+            </section>
+          )}
 
-      {report && report.claude_global_notes.length > 0 && (
-        <section className="claude-global-notes">
-          <div className="claude-notes-label">Claude's global notes (unverified opinion)</div>
-          {report.claude_global_notes.map((note, i) => (
-            <div key={i} className="claude-note claude-note-suspicion">
-              {note}
-            </div>
-          ))}
-        </section>
+          {viewMode === "source" && report && (
+            <section className="split-view">
+              <SourcePane
+                normalizedSource={report.normalized_source}
+                steps={report.steps}
+                focusedStepId={focusedStepId}
+                focusOrigin={focusOrigin}
+                onFocus={focusFromSource}
+              />
+              <StepSidebar
+                steps={sortSteps(report.steps)}
+                focusedStepId={focusedStepId}
+                focusOrigin={focusOrigin}
+                onFocus={focusFromSidebar}
+              />
+            </section>
+          )}
+
+          {report && report.claude_global_notes.length > 0 && (
+            <section className="claude-global-notes">
+              {report.claude_global_notes.map((note, i) => (
+                <div key={i} className="claude-note">
+                  {note}
+                </div>
+              ))}
+            </section>
+          )}
+
+          {(status === "done" || status === "error") && (
+            <button className="secondary restart-button" onClick={() => setStage("input")}>
+              New proof
+            </button>
+          )}
+        </>
       )}
     </div>
   );

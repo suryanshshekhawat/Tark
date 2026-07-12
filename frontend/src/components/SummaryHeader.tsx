@@ -8,15 +8,14 @@ const STATUS_LABEL: Record<Report["overall_status"], string> = {
 
 export function SummaryHeader({ report }: { report: Report }) {
   return (
-    <div className={`summary-header status-${report.overall_status.toLowerCase()}`}>
+    <div
+      className={`summary-header status-${report.overall_status.toLowerCase()}`}
+      title="Verified = checked by Lean 4 or executable computation, not AI judgment."
+    >
       <div className="summary-status">{STATUS_LABEL[report.overall_status]}</div>
       <div className="summary-count">
-        {report.steps_verified}/{report.steps_total} steps verified
+        {report.steps_verified}/{report.steps_total} verified
       </div>
-      <p className="summary-disclaimer">
-        Verified steps are checked by the Lean 4 theorem prover or by executable
-        computation — not by the AI's judgment.
-      </p>
     </div>
   );
 }
