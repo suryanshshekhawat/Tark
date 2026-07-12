@@ -1,24 +1,29 @@
 """POST /api/verify — ingest + validate, then stream step results via SSE.
 
-Days 1-2 scope: runs the real LaTeX validator (§4a) but streams *mocked*
-step data (mock_pipeline) since Claude/Lean aren't wired in yet. Swapping
-run_mock_pipeline for the real pipeline is the only change needed later —
-that's the point of keeping this endpoint thin.
+Runs the real LaTeX validator (§4a) and the real Claude decompose/formalize
++ Lean/SymPy verify pipeline. If decomposition itself fails (no API key,
+malformed Claude response, network error) that's a `pipeline_error` SSE
+event — distinct from the 422 ingest error, since validation already
+passed; this is a downstream failure, not a bad-input one.
 """
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ..claude_client import ClaudeNotConfiguredError
 from ..models.schema import VerifyRequest
-from ..pipeline.mock_pipeline import build_report, run_mock_pipeline
+from ..pipeline.real_pipeline import run_real_pipeline
+from ..pipeline.report import build_report
 from ..validation.latex_validator import LatexValidator
 
 router = APIRouter()
 _validator = LatexValidator()
+_logger = logging.getLogger(__name__)
 
 
 def _sse(event: str, data: dict) -> str:
@@ -36,9 +41,17 @@ async def verify(request: VerifyRequest):
             yield _sse("auto_repair", repair.model_dump())
 
         steps = []
-        async for step in run_mock_pipeline(result.normalized_source):
-            steps.append(step)
-            yield _sse("step", step.model_dump())
+        try:
+            async for step in run_real_pipeline(result.normalized_source):
+                steps.append(step)
+                yield _sse("step", step.model_dump())
+        except ClaudeNotConfiguredError as exc:
+            yield _sse("pipeline_error", {"message": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 - never let the stream die silently
+            _logger.exception("Pipeline failed during decomposition")
+            yield _sse("pipeline_error", {"message": f"Pipeline failed: {exc}"})
+            return
 
         report = build_report(result.normalized_source, steps)
         yield _sse("done", report.model_dump())

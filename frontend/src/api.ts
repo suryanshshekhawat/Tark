@@ -4,6 +4,7 @@ export type VerifyStreamHandlers = {
   onAutoRepair?: (repair: AutoRepair) => void;
   onStep?: (step: Step) => void;
   onDone?: (report: Report) => void;
+  onPipelineError?: (message: string) => void;
 };
 
 /**
@@ -70,6 +71,9 @@ function dispatchEvent(rawEvent: string, handlers: VerifyStreamHandlers): void {
       break;
     case "done":
       handlers.onDone?.(payload as Report);
+      break;
+    case "pipeline_error":
+      handlers.onPipelineError?.((payload as { message: string }).message);
       break;
   }
 }

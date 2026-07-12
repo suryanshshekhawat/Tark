@@ -7,7 +7,7 @@ Claude-generated code with more than a hard timeout and a scratch directory.
 from __future__ import annotations
 
 import subprocess
-import tempfile
+import sys
 import uuid
 from pathlib import Path
 
@@ -32,29 +32,41 @@ DEFAULT_TIMEOUT = 30.0  # seconds — §8.2: 20-30s hard timeout (upper bound; s
 # than subsequent ones.
 
 
-class LeanTimeoutError(Exception):
-    pass
+def _kill_process_tree(pid: int) -> None:
+    """`lake env lean` spawns `lean.exe` as a child rather than exec'ing
+    into it, and Windows doesn't kill process trees on its own — a plain
+    proc.kill() on timeout leaves `lean.exe` running indefinitely, still
+    holding CPU/memory. `taskkill /T` kills the whole tree.
+    """
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+        )
+    else:
+        import os
+        import signal
+
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _classify_failure(stdout: str, stderr: str) -> Verdict:
-    """Distinguish a genuine mathematical rejection from a syntax/tactic
-    failure so the repair loop (§8.3) knows whether to retry or give up.
-
-    Lean reports both as nonzero exit + "error:" lines, so this is a
-    best-effort heuristic on the message text — the caller (pipeline repair
-    loop) is what actually decides whether to retry, not this function. This
-    function only ever returns REFUTED or UNVERIFIED, never VERIFIED.
+    """Almost every Lean compiler failure in an LLM-generated-tactic setting
+    is a proof-engineering bug (wrong lemma, unsolved goal, bad import),
+    not evidence the theorem statement is false — "type mismatch" in
+    particular fires just as often when a *true* statement is proved with
+    the wrong lemma as it would for a false one (observed directly: a true
+    statement misclassified REFUTED because Claude cited a lemma with a
+    mismatched shape). Lean does not hand us a reliable "this claim is
+    false" signal the way a direct SymPy computation does, so this always
+    returns UNVERIFIED — a false REFUTED (telling a user their true step is
+    wrong) is worse than an UNVERIFIED that just means "couldn't confirm".
+    REFUTED for Lean is intentionally unreachable in v1; only §9's SymPy
+    verifier (a direct False result) produces it.
     """
-    combined = (stdout + stderr).lower()
-    # `sorry` means an incomplete proof, not a rejection of the claim. Match
-    # loosely on "uses" + "sorry" rather than the exact quote glyph Lean uses
-    # around the identifier, since that has changed between Lean versions.
-    if "uses" in combined and "sorry" in combined:
-        return Verdict.UNVERIFIED
-    # A type mismatch on the theorem statement itself (not tactic syntax)
-    # is the closest signal we get to "Lean rejected the mathematical claim".
-    if "type mismatch" in combined and "tactic" not in combined:
-        return Verdict.REFUTED
     return Verdict.UNVERIFIED
 
 
@@ -64,28 +76,39 @@ class LeanVerifier(Verifier):
         file_path = SCRATCH_DIR / f"check_{uuid.uuid4().hex}.lean"
         file_path.write_text(code, encoding="utf-8")
 
+        proc = subprocess.Popen(
+            ["lake", "env", "lean", str(file_path)],
+            cwd=str(LEAN_PROJECT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            proc = subprocess.run(
-                ["lake", "env", "lean", str(file_path)],
-                cwd=str(LEAN_PROJECT_DIR),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc.pid)
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
+            # Windows Popen.communicate() has been observed to return None
+            # (not "") for a stream after the process was killed externally
+            # via taskkill rather than proc.kill() — coerce defensively.
+            stdout, stderr = stdout or "", stderr or ""
             return VerdictResult(
                 verdict=Verdict.UNVERIFIED,
                 verifier=VerifierName.LEAN,
                 evidence=Evidence(
                     raw_output=f"Lean check timed out after {timeout}s.\n"
-                    f"stdout so far:\n{exc.stdout or ''}\nstderr so far:\n{exc.stderr or ''}",
+                    f"stdout so far:\n{stdout}\nstderr so far:\n{stderr}",
                     exit_code=None,
                 ),
             )
         finally:
             file_path.unlink(missing_ok=True)
 
-        combined_output = (proc.stdout + proc.stderr).lower()
+        stdout, stderr = stdout or "", stderr or ""
+        combined_output = (stdout + stderr).lower()
         uses_sorry = "uses" in combined_output and "sorry" in combined_output
         if proc.returncode == 0 and uses_sorry:
             # Lean treats `sorry` as a warning, not an error — exit code 0.
@@ -94,7 +117,7 @@ class LeanVerifier(Verifier):
         elif proc.returncode == 0:
             verdict = Verdict.VERIFIED
         else:
-            verdict = _classify_failure(proc.stdout, proc.stderr)
+            verdict = _classify_failure(stdout, stderr)
 
         return VerdictResult(
             verdict=verdict,
@@ -102,7 +125,7 @@ class LeanVerifier(Verifier):
             evidence=Evidence(
                 raw_output=f"$ lake env lean {file_path.name}\n"
                 f"exit code: {proc.returncode}\n"
-                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}",
+                f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
                 exit_code=proc.returncode,
             ),
         )

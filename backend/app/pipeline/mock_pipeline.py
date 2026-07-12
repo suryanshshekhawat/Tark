@@ -17,13 +17,13 @@ from ..models.schema import (
     Classification,
     Evidence,
     Formalization,
-    OverallStatus,
     Report,
     SourceSpan,
     Step,
     Verdict,
     VerifierName,
 )
+from .report import build_report as _build_report
 
 
 def _canned_steps(normalized_source: str) -> list[Step]:
@@ -91,21 +91,9 @@ async def run_mock_pipeline(normalized_source: str) -> AsyncGenerator[Step, None
 
 
 def build_report(normalized_source: str, steps: list[Step]) -> Report:
-    verified = sum(1 for s in steps if s.verdict == Verdict.VERIFIED)
-    refuted = any(s.verdict == Verdict.REFUTED for s in steps)
-    if refuted:
-        status = OverallStatus.REFUTED_SOMEWHERE
-    elif verified == len(steps):
-        status = OverallStatus.FULLY_VERIFIED
-    else:
-        status = OverallStatus.PARTIALLY_VERIFIED
-
-    return Report(
-        overall_status=status,
-        steps_verified=verified,
-        steps_total=len(steps),
-        normalized_source=normalized_source,
-        steps=steps,
+    return _build_report(
+        normalized_source,
+        steps,
         claude_global_notes=[
             "(mock) This report came from the Day 1-2 SSE scaffold, not real Claude/Lean output."
         ],

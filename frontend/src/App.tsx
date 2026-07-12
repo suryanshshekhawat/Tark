@@ -1,9 +1,25 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import "./App.css";
 import { streamVerify } from "./api";
 import { StepCard } from "./components/StepCard";
 import { SummaryHeader } from "./components/SummaryHeader";
 import type { AutoRepair, IngestError, Report, Step } from "./types";
+
+// Steps stream in completion order, not proof order — sort S2 before S10
+// for display (plain string sort would put S10 first).
+function stepSortKey(id: string): [string, number] {
+  const match = id.match(/^(\D*)(\d+)$/);
+  if (match) return [match[1], parseInt(match[2], 10)];
+  return [id, 0];
+}
+
+function sortSteps(steps: Step[]): Step[] {
+  return [...steps].sort((a, b) => {
+    const [aPrefix, aNum] = stepSortKey(a.id);
+    const [bPrefix, bNum] = stepSortKey(b.id);
+    return aPrefix === bPrefix ? aNum - bNum : aPrefix.localeCompare(bPrefix);
+  });
+}
 
 const EXAMPLE_PROOF = String.raw`Suppose, for contradiction, that $\sqrt{2}$ is rational. Then
 $\sqrt{2} = p/q$ for some integers $p, q$ with $\gcd(p, q) = 1$.
@@ -20,6 +36,9 @@ function App() {
   const [autoRepairs, setAutoRepairs] = useState<AutoRepair[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [ingestError, setIngestError] = useState<IngestError | null>(null);
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
+
+  const sortedSteps = useMemo(() => sortSteps(steps), [steps]);
 
   async function handleVerify() {
     setStatus("streaming");
@@ -27,6 +46,7 @@ function App() {
     setAutoRepairs([]);
     setReport(null);
     setIngestError(null);
+    setPipelineError(null);
 
     try {
       await streamVerify(latex, {
@@ -35,6 +55,10 @@ function App() {
         onDone: (rep) => {
           setReport(rep);
           setStatus("done");
+        },
+        onPipelineError: (message) => {
+          setPipelineError(message);
+          setStatus("error");
         },
       });
     } catch (err) {
@@ -88,6 +112,13 @@ function App() {
         </section>
       )}
 
+      {pipelineError && (
+        <section className="ingest-error">
+          <div className="ingest-error-type">pipeline error</div>
+          <p>{pipelineError}</p>
+        </section>
+      )}
+
       {autoRepairs.length > 0 && (
         <section className="auto-repairs">
           {autoRepairs.map((r, i) => (
@@ -100,9 +131,9 @@ function App() {
 
       {report && <SummaryHeader report={report} />}
 
-      {steps.length > 0 && (
+      {sortedSteps.length > 0 && (
         <section className="report-view">
-          {steps.map((step) => (
+          {sortedSteps.map((step) => (
             <StepCard key={step.id} step={step} />
           ))}
         </section>
