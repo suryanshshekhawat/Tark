@@ -209,7 +209,7 @@ function App() {
           )}
 
           {report && report.claude_global_notes.length > 0 && (
-            <section className="claude-global-notes">
+            <section className="claude-global-notes" title="Unverified opinion — not a verifier result">
               {report.claude_global_notes.map((note, i) => (
                 <div key={i} className="claude-note">
                   {note}

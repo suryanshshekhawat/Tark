@@ -12,9 +12,26 @@ Conventions:
 - Steps are identified "S1", "S2", ... in proof order (assigned by Claude during
   decomposition). Sort naturally (S2 < S10), not lexicographically — see
   `backend/app/pipeline/report.py::_step_sort_key`.
-- Verdict enum: `VERIFIED` | `REFUTED` | `UNVERIFIED` (never a bare "verified" —
-  which verifier produced it is a separate `verifier` field: `lean` | `sympy` | null).
+- Verdict enum: `VERIFIED` | `REFUTED` | `UNVERIFIED` | `ASSUMED` (never a bare
+  "verified" — which verifier produced it is a separate `verifier` field:
+  `lean` | `sympy` | null; `ASSUMED` always has `verifier: null`).
+- `ASSUMED` is for premises/setup ("let p, q be given", "suppose for
+  contradiction") — not a claim, nothing to check, never green. Distinct from
+  `UNVERIFIED`, which means "this needed checking and we couldn't."
+  Classification gets a matching `premise` value (alongside `lean_candidate` |
+  `computational` | `unformalizable`) so decomposition can tell "this isn't a
+  claim" apart from "this is a claim we can't formalize." Both are a
+  *structural* judgment by Claude (what kind of sentence is this?), not a
+  correctness judgment — `ASSUMED` must never be produced by an LLM deciding a
+  claim is "probably true." See CONSTRUCTION_PLAN.md's core principle.
 - Overall status: `FULLY_VERIFIED` | `PARTIALLY_VERIFIED` | `REFUTED_SOMEWHERE`.
+  `ASSUMED` steps don't block `FULLY_VERIFIED` (they're not obligations) — see
+  `report.py::build_report`'s `checkable` filter.
+- The advisory pass (stage 6, `pipeline/advisory.py`) runs once after every
+  step has a final verdict, not during decomposition — it needs the verdicts
+  to comment on them ("this UNVERIFIED step might indicate X"). It never
+  raises; a failed advisory call just means an empty `claude_global_notes`,
+  not a broken report.
 - Claude is never asked for character offsets into the source (LLMs drift badly at
   counting characters). It's only asked for a verbatim quoted `anchor_text`; the
   backend locates it via exact-match-then-fuzzy-match

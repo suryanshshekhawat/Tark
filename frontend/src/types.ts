@@ -2,9 +2,9 @@
 // This is the contract; keep the two in sync by hand until there's a
 // codegen step worth adding.
 
-export type Classification = "lean_candidate" | "computational" | "unformalizable";
+export type Classification = "lean_candidate" | "computational" | "unformalizable" | "premise";
 
-export type Verdict = "VERIFIED" | "REFUTED" | "UNVERIFIED";
+export type Verdict = "VERIFIED" | "REFUTED" | "UNVERIFIED" | "ASSUMED";
 
 export type VerifierName = "lean" | "sympy";
 
@@ -55,6 +55,7 @@ export interface Report {
   overall_status: OverallStatus;
   steps_verified: number;
   steps_total: number;
+  steps_assumed: number;
   normalized_source: string;
   steps: Step[];
   claude_global_notes: string[];

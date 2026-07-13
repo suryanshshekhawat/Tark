@@ -21,11 +21,17 @@ def build_report(
 ) -> Report:
     ordered = sorted(steps, key=lambda s: _step_sort_key(s.id))
     verified = sum(1 for s in ordered if s.verdict == Verdict.VERIFIED)
+    assumed = sum(1 for s in ordered if s.verdict == Verdict.ASSUMED)
     refuted = any(s.verdict == Verdict.REFUTED for s in ordered)
+
+    # ASSUMED steps are premises, not obligations — a proof isn't "partially
+    # verified" because it has premises. FULLY_VERIFIED means every step that
+    # could be checked was, ignoring the ones that were never claims.
+    checkable = [s for s in ordered if s.verdict != Verdict.ASSUMED]
 
     if refuted:
         status = OverallStatus.REFUTED_SOMEWHERE
-    elif verified == len(ordered):
+    elif checkable and verified == len(checkable):
         status = OverallStatus.FULLY_VERIFIED
     else:
         status = OverallStatus.PARTIALLY_VERIFIED
@@ -34,6 +40,7 @@ def build_report(
         overall_status=status,
         steps_verified=verified,
         steps_total=len(ordered),
+        steps_assumed=assumed,
         normalized_source=normalized_source,
         steps=ordered,
         claude_global_notes=claude_global_notes or [],

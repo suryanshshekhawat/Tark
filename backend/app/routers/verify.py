@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..claude_client import ClaudeNotConfiguredError
 from ..models.schema import VerifyRequest
+from ..pipeline.advisory import run_advisory_pass
 from ..pipeline.real_pipeline import run_real_pipeline
 from ..pipeline.report import build_report
 from ..validation.latex_validator import LatexValidator
@@ -53,7 +54,10 @@ async def verify(request: VerifyRequest):
             yield _sse("pipeline_error", {"message": f"Pipeline failed: {exc}"})
             return
 
-        report = build_report(result.normalized_source, steps)
+        # Stage 6 (§6): whole-proof advisory notes, computed only after every
+        # step has its final verdict, kept structurally separate from them.
+        global_notes = await run_advisory_pass(result.normalized_source, steps)
+        report = build_report(result.normalized_source, steps, claude_global_notes=global_notes)
         yield _sse("done", report.model_dump())
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

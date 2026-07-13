@@ -31,10 +31,18 @@ proved as a Lean 4 theorem using Mathlib (divisibility, gcd, parity, modular ari
 irrationality, etc).
   - "computational": a concrete, decidable numerical claim best checked by direct \
 computation (e.g. "gcd(48,18)=6", "1000003 is prime").
-  - "unformalizable": a step that cannot be captured as a precise formal statement (an \
-informal remark, a step that says "clearly"/"obviously" without stating precisely what \
-follows, or reasoning about definitions rather than a checkable claim). If you use this \
-classification you MUST also fill in unformalizable_reason.
+  - "premise": NOT a claim at all — a stipulation, hypothesis, or proof-strategy setup \
+that the proof simply assumes or introduces ("suppose, for contradiction, that ..."; \
+"let p, q be integers with ..."; "write p = 2k for some integer k"). There is nothing to \
+verify here; it is given. Use this whenever the step's job is to *introduce* an object or \
+assumption rather than *claim* something is true. If you use this classification, fill in \
+`note` with a one-sentence description of what's being assumed/introduced.
+  - "unformalizable": a step that DOES assert something, but cannot be captured as a \
+precise formal statement (an informal remark, a step that says "clearly"/"obviously" \
+without stating precisely what follows, a claim resting on unstated context). This is for \
+claims you can't check, not for premises — if it isn't asserting anything, it's "premise" \
+instead. If you use this classification, fill in `note` explaining why it can't be \
+formalized.
 - anchor_text: a short (roughly 5-15 word) substring copied EXACTLY, character-for-\
 character, from the proof source given below, identifying where this step appears. It \
 must be a verbatim quote, not a paraphrase — it is used to highlight the step in the \
@@ -59,10 +67,21 @@ DECOMPOSE_TOOL = {
                         "depends_on": {"type": "array", "items": {"type": "string"}},
                         "classification": {
                             "type": "string",
-                            "enum": ["lean_candidate", "computational", "unformalizable"],
+                            "enum": [
+                                "lean_candidate",
+                                "computational",
+                                "premise",
+                                "unformalizable",
+                            ],
                         },
                         "anchor_text": {"type": "string"},
-                        "unformalizable_reason": {"type": "string"},
+                        "note": {
+                            "type": "string",
+                            "description": (
+                                "Required for premise/unformalizable: what's being "
+                                "assumed, or why this can't be formalized."
+                            ),
+                        },
                     },
                     "required": ["id", "statement", "depends_on", "classification", "anchor_text"],
                 },
@@ -80,7 +99,7 @@ class RawStep:
     depends_on: list[str]
     classification: Classification
     anchor_text: str
-    unformalizable_reason: str | None = field(default=None)
+    note: str | None = field(default=None)
 
 
 class DecompositionError(Exception):
@@ -121,7 +140,7 @@ async def decompose(normalized_source: str) -> list[RawStep]:
                     depends_on=[str(d) for d in raw.get("depends_on", [])],
                     classification=Classification(raw["classification"]),
                     anchor_text=str(raw["anchor_text"]),
-                    unformalizable_reason=raw.get("unformalizable_reason"),
+                    note=raw.get("note"),
                 )
             )
         except (KeyError, ValueError) as exc:

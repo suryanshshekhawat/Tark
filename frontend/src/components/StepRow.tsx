@@ -4,6 +4,7 @@ const VERDICT_LABEL: Record<Step["verdict"], string> = {
   VERIFIED: "Verified",
   REFUTED: "Refuted",
   UNVERIFIED: "Unverified",
+  ASSUMED: "Assumed",
 };
 
 export function StepRow({

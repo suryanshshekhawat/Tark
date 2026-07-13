@@ -63,8 +63,8 @@ export function renderLatexText(text: string, keyPrefix: string): ReactNode[] {
   );
 }
 
-export type Verdict = "VERIFIED" | "REFUTED" | "UNVERIFIED";
-export type Classification = "lean_candidate" | "computational" | "unformalizable";
+export type Verdict = "VERIFIED" | "REFUTED" | "UNVERIFIED" | "ASSUMED";
+export type Classification = "lean_candidate" | "computational" | "unformalizable" | "premise";
 
 export interface HighlightableStep {
   id: string;

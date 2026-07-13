@@ -15,12 +15,22 @@ class Classification(str, Enum):
     LEAN_CANDIDATE = "lean_candidate"
     COMPUTATIONAL = "computational"
     UNFORMALIZABLE = "unformalizable"
+    # A premise/setup step ("let p, q be given", "suppose for contradiction") —
+    # not a claim to check at all, distinct from UNFORMALIZABLE (a claim we
+    # couldn't formalize). This is a structural judgment ("is this a claim or
+    # a stipulation?"), not a correctness judgment — it never produces a
+    # VERIFIED-like result. See CLAUDE.md.
+    PREMISE = "premise"
 
 
 class Verdict(str, Enum):
     VERIFIED = "VERIFIED"
     REFUTED = "REFUTED"
     UNVERIFIED = "UNVERIFIED"
+    # Given/stipulated, not a claim — never assigned by Lean/SymPy and never
+    # rendered as green. Distinct from UNVERIFIED, which means "this needed
+    # checking and we couldn't". Only ever assigned to PREMISE-classified steps.
+    ASSUMED = "ASSUMED"
 
 
 class VerifierName(str, Enum):
@@ -85,6 +95,7 @@ class Report(BaseModel):
     overall_status: OverallStatus
     steps_verified: int
     steps_total: int
+    steps_assumed: int = 0
     normalized_source: str
     steps: list[Step]
     claude_global_notes: list[str] = Field(default_factory=list)

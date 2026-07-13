@@ -5,6 +5,8 @@
   --refuted-bg: #fee2e2;
   --unverified: #b45309;
   --unverified-bg: #fef3c7;
+  --assumed: #475569;
+  --assumed-bg: #e2e8f0;
 }
 
 .app {
@@ -218,6 +220,9 @@ button.active {
   border-left-color: var(--unverified);
   border-left-style: dashed;
 }
+.step-card.verdict-assumed {
+  border-left-color: var(--assumed);
+}
 
 .step-card-header {
   display: flex;
@@ -252,6 +257,10 @@ button.active {
 .verdict-badge-unverified {
   color: var(--unverified);
   background: var(--unverified-bg);
+}
+.verdict-badge-assumed {
+  color: var(--assumed);
+  background: var(--assumed-bg);
 }
 
 .depends-on {
@@ -337,6 +346,9 @@ button.active {
 .source-highlight.verdict-unverified {
   background: var(--unverified-bg);
 }
+.source-highlight.verdict-assumed {
+  background: var(--assumed-bg);
+}
 
 .source-highlight.unformalizable {
   background: transparent;
@@ -373,6 +385,9 @@ button.active {
 }
 .step-row.verdict-unverified {
   border-left-color: var(--unverified);
+}
+.step-row.verdict-assumed {
+  border-left-color: var(--assumed);
 }
 
 .step-row.expanded {
