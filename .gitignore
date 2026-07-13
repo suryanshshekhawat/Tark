@@ -5,6 +5,9 @@ backend/**/__pycache__/
 backend/.pytest_cache/
 *.pyc
 
+# Cross-request verified-proof cache (backend/app/pipeline/proof_cache.py)
+backend/tark_cache.sqlite3
+
 # Env / secrets
 .env
 backend/.env

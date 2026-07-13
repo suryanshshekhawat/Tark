@@ -7,11 +7,13 @@ anchor_text, which span_matching.find_span locates in the backend.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
-from ..claude_client import get_client
-from ..config import settings
+from ..claude_client import cached_system_message, cached_tool, get_llm, invoke_llm
 from ..models.schema import Classification
+
+_logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the decomposition stage of Tark, a proof verification tool.
 
@@ -79,7 +81,7 @@ class RawStep:
     statement: str
     depends_on: list[str]
     classification: Classification
-    anchor_text: str
+    anchor_text: str | None
     unformalizable_reason: str | None = field(default=None)
 
 
@@ -87,44 +89,78 @@ class DecompositionError(Exception):
     """Claude's decomposition response didn't come back in the expected shape."""
 
 
-async def decompose(normalized_source: str) -> list[RawStep]:
-    client = get_client()
-    response = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"Proof source:\n\n{normalized_source}",
-            }
-        ],
-        tools=[DECOMPOSE_TOOL],
-        tool_choice={"type": "tool", "name": "record_decomposition"},
+def _parse_raw_step(raw: dict, index: int) -> RawStep | None:
+    """One malformed step must not take the whole proof's decomposition down
+    with it (CONSTRUCTION_PLAN.md §4a.5: "a failure at step S4 should not
+    prevent S1-S3's results from being shown") — caught live via the
+    benchmark harness: Claude omitted `anchor_text` on one unformalizable
+    step despite it being a `required` field in the tool schema (schema
+    `required` is a strong hint under forced tool-use, not a hard guarantee),
+    and that single omission previously raised `DecompositionError` and
+    killed every other step's results too.
+
+    `id` and `statement` are the two fields with no safe fallback — without
+    them there's nothing meaningful to render, so only those cause this
+    particular step to be dropped (logged, not silently). Everything else
+    degrades to a safe default: missing classification becomes
+    `unformalizable` with a note explaining why (never invent a formalizable
+    claim), missing anchor_text becomes `None` (span_matching.find_span
+    already renders that as "no highlight" rather than failing).
+    """
+    try:
+        step_id = str(raw["id"])
+        statement = str(raw["statement"])
+    except KeyError:
+        _logger.warning("Dropping decomposition step %d: missing id or statement: %r", index, raw)
+        return None
+
+    depends_on = [str(d) for d in raw.get("depends_on", []) or []]
+    anchor_text = raw.get("anchor_text")
+    anchor_text = str(anchor_text) if anchor_text is not None else None
+
+    try:
+        classification = Classification(raw["classification"])
+        unformalizable_reason = raw.get("unformalizable_reason")
+    except (KeyError, ValueError):
+        classification = Classification.UNFORMALIZABLE
+        unformalizable_reason = (
+            "Decomposition response for this step was malformed "
+            f"(missing or invalid classification: {raw.get('classification')!r}) — "
+            "downgraded to unformalizable rather than guessing."
+        )
+
+    return RawStep(
+        id=step_id,
+        statement=statement,
+        depends_on=depends_on,
+        classification=classification,
+        anchor_text=anchor_text,
+        unformalizable_reason=unformalizable_reason,
     )
 
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
-    if tool_use is None:
+
+async def decompose(normalized_source: str) -> list[RawStep]:
+    llm = get_llm(max_tokens=4096).bind_tools(
+        [cached_tool(DECOMPOSE_TOOL)], tool_choice={"type": "tool", "name": "record_decomposition"}
+    )
+    response = await invoke_llm(
+        llm,
+        [
+            cached_system_message(SYSTEM_PROMPT),
+            {"role": "user", "content": f"Proof source:\n\n{normalized_source}"},
+        ],
+    )
+
+    tool_call = next((tc for tc in response.tool_calls if tc["name"] == "record_decomposition"), None)
+    if tool_call is None:
         raise DecompositionError("Claude did not return a record_decomposition tool call.")
 
-    raw_steps = tool_use.input.get("steps")
+    raw_steps = tool_call["args"].get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
         raise DecompositionError("Claude's decomposition returned no steps.")
 
-    steps: list[RawStep] = []
-    for raw in raw_steps:
-        try:
-            steps.append(
-                RawStep(
-                    id=str(raw["id"]),
-                    statement=str(raw["statement"]),
-                    depends_on=[str(d) for d in raw.get("depends_on", [])],
-                    classification=Classification(raw["classification"]),
-                    anchor_text=str(raw["anchor_text"]),
-                    unformalizable_reason=raw.get("unformalizable_reason"),
-                )
-            )
-        except (KeyError, ValueError) as exc:
-            raise DecompositionError(f"Malformed step in decomposition response: {raw}") from exc
+    steps = [s for i, raw in enumerate(raw_steps) if (s := _parse_raw_step(raw, i)) is not None]
+    if not steps:
+        raise DecompositionError("Every step in the decomposition response was malformed.")
 
     return steps

@@ -1,6 +1,7 @@
-anthropic==0.116.0
 fastapi==0.139.0
 httpx==0.28.1
+langchain-anthropic==1.4.8
+langgraph==1.2.9
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
