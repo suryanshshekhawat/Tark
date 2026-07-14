@@ -73,3 +73,24 @@ def test_for_loop_unpack_works():
         "result = total == 5"
     )
     assert res.verdict == Verdict.VERIFIED
+
+
+def test_list_indexing_read_works():
+    res = SympyVerifier().check("values = [10, 20, 30]\nresult = values[1] == 20")
+    assert res.verdict == Verdict.VERIFIED
+
+
+def test_list_indexing_write_works():
+    res = SympyVerifier().check("values = [1, 2, 3]\nvalues[1] = 99\nresult = values[1] == 99")
+    assert res.verdict == Verdict.VERIFIED
+
+
+def test_dict_indexing_works():
+    res = SympyVerifier().check("d = {'a': 1}\nresult = d['a'] == 1")
+    assert res.verdict == Verdict.VERIFIED
+
+
+def test_plain_for_loop_without_unpacking_works():
+    """`_getiter_` backs every `for` loop, not just ones that unpack."""
+    res = SympyVerifier().check("total = 0\nfor x in [1, 2, 3]:\n    total += x\nresult = total == 6")
+    assert res.verdict == Verdict.VERIFIED

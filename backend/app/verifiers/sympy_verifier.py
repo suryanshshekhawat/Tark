@@ -40,7 +40,9 @@ import statistics
 import numbers
 
 from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import (
+    full_write_guard,
     guarded_iter_unpack_sequence,
     guarded_unpack_sequence,
     safer_getattr,
@@ -65,17 +67,21 @@ def _run():
         return
 
     restricted_globals = dict(safe_globals)
+    # RestrictedPython's compiled bytecode calls out to these seven guard
+    # hooks for ordinary Python constructs (attribute access, subscripting,
+    # iteration, unpacking, augmented assignment, writes) — there is no
+    # built-in default for any of them, `safe_globals` supplies none of
+    # them, and a missing one doesn't fail loudly: the snippet just dies
+    # with a bare, misleading NameError. This list was pulled directly from
+    # RestrictedPython's transformer source (every `ast.Name('_..._')` it
+    # emits), not assembled by discovering gaps one at a time.
     restricted_globals["_getattr_"] = safer_getattr
-    # Tuple-unpacking assignment (`n, k = sympy.symbols(...)`), unpacking in
-    # a `for` (`for p, e in factorint(n).items():`), and augmented
-    # assignment (`total += x`) each compile to a call to one of these
-    # guards — idiomatic sympy code uses all three constantly, and without
-    # them every such snippet dies with a bare NameError that looks nothing
-    # like what actually went wrong.
+    restricted_globals["_getitem_"] = default_guarded_getitem
     restricted_globals["_getiter_"] = iter
     restricted_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
     restricted_globals["_unpack_sequence_"] = guarded_unpack_sequence
     restricted_globals["_inplacevar_"] = _inplacevar_
+    restricted_globals["_write_"] = full_write_guard
     restricted_globals.update({
         "math": math, "sympy": sympy, "fractions": fractions,
         "itertools": itertools, "functools": functools, "decimal": decimal,
