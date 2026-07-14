@@ -7,11 +7,15 @@ anchor_text, which span_matching.find_span locates in the backend.
 """
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 
 from ..claude_client import get_client
 from ..config import settings
 from ..models.schema import Classification
+
+_logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the decomposition stage of Tark, a proof verification tool.
 
@@ -170,7 +174,33 @@ async def _decompose_once(client, normalized_source: str) -> list[RawStep]:
         raise DecompositionError("Claude did not return a record_decomposition tool call.")
 
     raw_steps = tool_use.input.get("steps")
+    if isinstance(raw_steps, str):
+        # On long inputs, forced tool-use occasionally emits a large `steps`
+        # array double-encoded as a JSON string ({"steps": "[...]"} instead
+        # of {"steps": [...]}) rather than true structured output — a real,
+        # complete decomposition dodging the schema's typing, not a missing
+        # one. Recover it before falling through to the empty-steps error.
+        try:
+            parsed = json.loads(raw_steps)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            raw_steps = parsed.get("steps")
+        elif isinstance(parsed, list):
+            raw_steps = parsed
+
     if not isinstance(raw_steps, list) or not raw_steps:
+        # Root cause of empty-steps responses was never pinned down (see
+        # HANDOFF.md) because no live repro captured what Claude actually
+        # said. Log the full tool_use input and any accompanying text block
+        # so the next occurrence is diagnosable instead of a bare error.
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        _logger.warning(
+            "Empty decomposition steps. stop_reason=%r tool_use.input=%r text_blocks=%r",
+            response.stop_reason,
+            tool_use.input,
+            text_blocks,
+        )
         raise DecompositionError("Claude's decomposition returned no steps.")
 
     steps: list[RawStep] = []
