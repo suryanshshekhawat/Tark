@@ -56,7 +56,23 @@ must be a verbatim quote, not a paraphrase — it is used to highlight the step 
 original text.
 
 Decompose the whole proof. Do not skip steps, and do not merge unrelated claims into one \
-step just because they're adjacent."""
+step just because they're adjacent.
+
+The input may be a real, messy excerpt from a paper — bibliography commands, section/\
+appendix headers, citations, custom formatting macros, multiple independent theorems and \
+proofs in sequence. Handle this explicitly:
+- Skip non-mathematical apparatus entirely (bibliography/citation commands, section \
+headings with no claim in them, standalone `\\label`/`\\ref`). Don't manufacture a step for \
+"this is a section header."
+- Tark's scope is number theory. If the document contains multiple independent proofs, \
+decompose the first substantial number-theory proof in full and STOP — do not continue on \
+to unrelated later proofs/sections (e.g. asymptotic complexity analysis, combinatorics) \
+just because they're present in the same input. Your output budget is finite; a complete \
+decomposition of one proof beats a truncated decomposition of several.
+- If truly nothing in the input is a number-theory proof (e.g. it's entirely bibliography/\
+complexity analysis/other domains), it is legitimate to return very few steps, but say so: \
+give at least one step classified "unformalizable" whose note explains that no in-scope \
+proof content was found, rather than returning an empty list."""
 
 DECOMPOSE_TOOL = {
     "name": "record_decomposition",
@@ -113,11 +129,14 @@ class DecompositionError(Exception):
     """Claude's decomposition response didn't come back in the expected shape."""
 
 
+DECOMPOSE_MAX_TOKENS = 8192
+
+
 async def decompose(normalized_source: str) -> list[RawStep]:
     client = get_client()
     response = await client.messages.create(
         model=settings.claude_model,
-        max_tokens=4096,
+        max_tokens=DECOMPOSE_MAX_TOKENS,
         system=SYSTEM_PROMPT,
         messages=[
             {
@@ -128,6 +147,18 @@ async def decompose(normalized_source: str) -> list[RawStep]:
         tools=[DECOMPOSE_TOOL],
         tool_choice={"type": "tool", "name": "record_decomposition"},
     )
+
+    if response.stop_reason == "max_tokens":
+        # The tool call's JSON was cut off mid-generation — whatever the SDK
+        # salvaged (often an empty dict) is not a real decomposition. Long,
+        # multi-proof inputs are the common trigger; say so specifically
+        # rather than the misleading "returned no steps" a truncated call
+        # would otherwise produce.
+        raise DecompositionError(
+            "This input is too long to decompose in a single pass (Claude's response was "
+            "cut off before finishing). Try pasting a single, shorter proof rather than a "
+            "full document/appendix."
+        )
 
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if tool_use is None:
@@ -140,17 +171,40 @@ async def decompose(normalized_source: str) -> list[RawStep]:
     steps: list[RawStep] = []
     for raw in raw_steps:
         try:
+            classification = Classification(raw["classification"])
+        except (KeyError, ValueError):
+            # A step with a missing/invalid classification is genuinely
+            # ambiguous — degrade it to unformalizable rather than either
+            # guessing a classification or discarding the step (and losing
+            # visibility into a chunk of the user's proof) or aborting the
+            # whole batch over one malformed entry (§4a.5: a failure on one
+            # step must not take down the others).
+            classification = Classification.UNFORMALIZABLE
+
+        try:
             steps.append(
                 RawStep(
                     id=str(raw["id"]),
-                    statement=str(raw["statement"]),
+                    statement=str(raw.get("statement", "(statement missing from decomposition response)")),
                     depends_on=[str(d) for d in raw.get("depends_on", [])],
-                    classification=Classification(raw["classification"]),
-                    anchor_text=str(raw["anchor_text"]),
+                    classification=classification,
+                    # anchor_text is best-effort — find_span already handles
+                    # "" by rendering the step without a source highlight
+                    # rather than failing, so a missing anchor_text should
+                    # degrade the same way, not abort decomposition entirely.
+                    anchor_text=str(raw.get("anchor_text", "")),
                     note=raw.get("note"),
                 )
             )
-        except (KeyError, ValueError) as exc:
-            raise DecompositionError(f"Malformed step in decomposition response: {raw}") from exc
+        except KeyError:
+            # No `id` at all means this entry can't be tracked (dependencies
+            # reference ids) — this one genuinely has to be dropped, but
+            # only this one, not the rest of the batch.
+            continue
+
+    if not steps:
+        raise DecompositionError(
+            "Claude's decomposition returned steps, but none could be parsed."
+        )
 
     return steps
