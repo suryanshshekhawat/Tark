@@ -4,6 +4,7 @@ const VERDICT_LABEL: Record<Step["verdict"], string> = {
   VERIFIED: "Verified",
   REFUTED: "Refuted",
   UNVERIFIED: "Unverified",
+  ASSUMED: "Assumed",
 };
 
 export function StepRow({
@@ -34,10 +35,21 @@ export function StepRow({
         <div className="step-row-body">
           <p>{step.statement}</p>
 
-          {step.evidence && (
+          {(step.formalization?.lean_code || step.formalization?.python_code || step.evidence) && (
             <details onClick={(e) => e.stopPropagation()}>
               <summary>Evidence</summary>
-              <pre>{step.evidence.raw_output}</pre>
+              {(step.formalization?.lean_code || step.formalization?.python_code) && (
+                <>
+                  <div className="evidence-label">Code checked</div>
+                  <pre>{step.formalization.lean_code || step.formalization.python_code}</pre>
+                </>
+              )}
+              {step.evidence && (
+                <>
+                  <div className="evidence-label">Output</div>
+                  <pre>{step.evidence.raw_output}</pre>
+                </>
+              )}
             </details>
           )}
 

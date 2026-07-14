@@ -39,11 +39,14 @@ Rules:
 write bare `import Mathlib` — importing the whole library takes 50+ seconds and will time \
 out the checker.
 - Also avoid broad umbrella imports that pull in huge chunks of the library despite \
-sounding narrow: `Mathlib.Tactic` (imports the entire tactic framework), \
-`Mathlib.Analysis.*`, `Mathlib.Data.Real.Sqrt` / `Mathlib.Data.Real.Irrational` (pull in \
-real analysis). Most `omega`, `ring`, `linarith`, `norm_num`, `decide`, `field_simp` tactics \
-are available from a small, specific import or from core Lean — import the narrowest file \
-that defines the specific lemma/definition you actually need, not a category-level umbrella.
+sounding narrow: `Mathlib.Tactic` (imports the entire tactic framework) and most of \
+`Mathlib.Analysis.*`. Most `omega`, `ring`, `linarith`, `norm_num`, `decide`, `field_simp` \
+tactics are available from a small, specific import or from core Lean — import the \
+narrowest file that defines the specific lemma/definition you actually need, not a \
+category-level umbrella. If the step genuinely needs `Real.sqrt`, use \
+`import Mathlib.Analysis.Real.Sqrt` specifically (see pattern 5 below) — not \
+`Mathlib.Analysis.SpecialFunctions.Sqrt`, which doesn't reliably exist at that path and, \
+even when it resolves, pulls in more than needed.
 - Mathlib reorganizes its file layout often, more often than your training data — a plausible \
 import path may no longer exist (e.g. `Mathlib.Data.Nat.Parity` is now \
 `Mathlib.Algebra.Ring.Parity`; `Mathlib.Data.Rat.Basic` is now `Mathlib.Data.Rat.Defs`). Use \
@@ -57,15 +60,102 @@ prefer this single import over guessing. For a step that only needs one narrow, 
 import (e.g. just `ring` or `Nat.GCD.Basic` alone), keep using that single targeted import — \
 measured slightly slower (~0.5s) than a single small import alone, since it always loads the \
 Real/Analysis content too even when unneeded.
-- The checker gives each attempt a hard ~30s wall-clock budget shared with other concurrent \
-checks — favor Nat/Int arithmetic formulations over Real-number ones where the underlying \
-proof allows it, since Real/Analysis imports are consistently the slowest.
+- The checker gives each attempt a hard wall-clock budget shared with other concurrent \
+checks (30s for a first-round attempt, 45s for a repair attempt) — favor Nat/Int arithmetic \
+formulations over Real-number ones where the underlying proof allows it, since `Real.sqrt` \
+alone costs ~25s to import regardless of proof complexity (measured by timing it against a \
+trivial goal, isolating import cost from proof cost) — that's most of a first-round \
+attempt's budget before any tactic even runs, so a Real.sqrt-based first attempt is much \
+more likely to need a repair round than a Nat/Int one purely on import cost, not proof \
+difficulty.
 - The file must be syntactically complete: import lines, then \
 `theorem <name> : <statement> := by <tactics>`.
 - Attempt a real proof — do not use `sorry`. If you cannot complete the proof, submit \
 your best attempt anyway; Lean will correctly report it as unverified, which is a fine \
 outcome. You are not the source of truth here, Lean's compiler is — never claim the proof \
-works, just submit your best formalization."""
+works, just submit your best formalization.
+- `omega` needs NO import — it's a core Lean tactic, not Mathlib. `ring`/`ring_nf` needs \
+`import Mathlib.Tactic.Ring`. `norm_num` needs `import Mathlib.Tactic.NormNum`. Forgetting \
+these is a common, avoidable failure — the tactic itself being "basic" does not mean it's \
+available for free.
+
+The following patterns are verified to compile against this exact Mathlib pin. When a step \
+matches one of these shapes, adapt the pattern directly rather than reconstructing an \
+approach from memory — memory is exactly what tends to cite renamed/nonexistent lemmas.
+
+1. A square is even iff its base is even:
+```lean
+import Mathlib.Algebra.Ring.Parity
+
+theorem ex1 (n k : ℕ) (h : n ^ 2 = 2 * k ^ 2) : Even n := by
+  have h2 : Even (n ^ 2) := ⟨k ^ 2, by omega⟩
+  exact (Nat.even_pow.mp h2).1
+```
+
+2. Unpacking `Even n` into a witness `n = 2 * k`:
+```lean
+import Mathlib.Algebra.Ring.Parity
+
+theorem ex2 (n : ℕ) (hn : Even n) : ∃ k : ℕ, n = 2 * k := by
+  obtain ⟨k, hk⟩ := hn
+  exact ⟨k, by omega⟩
+```
+
+3. Two even numbers can't be coprime (note: needs GCD.Basic AND Parity AND NormNum together \
+— a step mixing concepts needs an import per concept, not just one):
+```lean
+import Mathlib.Data.Nat.GCD.Basic
+import Mathlib.Algebra.Ring.Parity
+import Mathlib.Tactic.NormNum
+
+theorem ex3 (p q : ℕ) (hgcd : Nat.gcd p q = 1) (hp : Even p) (hq : Even q) : False := by
+  have h2p : (2 : ℕ) ∣ p := hp.two_dvd
+  have h2q : (2 : ℕ) ∣ q := hq.two_dvd
+  have h2gcd : (2 : ℕ) ∣ Nat.gcd p q := Nat.dvd_gcd h2p h2q
+  rw [hgcd] at h2gcd
+  exact (by norm_num : ¬ (2 : ℕ) ∣ 1) h2gcd
+```
+
+4. Pure algebraic substitution/rearrangement — prefer `ring_nf` + `omega` over manual \
+rewriting:
+```lean
+import Mathlib.Tactic.Ring
+
+theorem ex4 (p q k : ℕ) (hp : p = 2 * k) (h : p ^ 2 = 2 * q ^ 2) : 4 * k ^ 2 = 2 * q ^ 2 := by
+  subst hp
+  ring_nf
+  ring_nf at h
+  omega
+```
+
+5. Squaring a `Real.sqrt` equation (the ~25s cost below is the import alone, proved by \
+timing it against a trivial goal — budget for it, don't avoid the statement because of it):
+```lean
+import Mathlib.Analysis.Real.Sqrt
+
+theorem ex5 (p q : ℤ) (h : (p:ℝ) = (q:ℝ) * Real.sqrt 2) :
+    (p:ℝ) ^ 2 = 2 * (q:ℝ) ^ 2 := by
+  have hsq : Real.sqrt 2 ^ 2 = 2 := Real.sq_sqrt (by norm_num)
+  rw [h, mul_pow, hsq]
+  ring
+```
+Prefer the multiplicative form (`p = q * sqrt 2`) over a division form (`p / q = sqrt 2`) \
+where the source allows it — it avoids needing `field_simp` on top of the already-heavy \
+import.
+
+6. `sqrt(2)` (or any prime) is irrational — the whole proof is one line, don't overcomplicate \
+it with a manual contradiction argument:
+```lean
+import Mathlib.Analysis.Real.Sqrt
+import Mathlib.NumberTheory.Real.Irrational
+
+theorem ex6 : Irrational (Real.sqrt 2) :=
+  Nat.prime_two.irrational_sqrt
+```
+`Irrational` lives at `Mathlib.NumberTheory.Real.Irrational`, not \
+`Mathlib.Data.Real.Irrational` (renamed). `Nat.Prime.irrational_sqrt` takes the primality \
+proof directly (`Nat.prime_two`, or `by norm_num` for other primes) — no need to unfold \
+`Nat.Prime` into its components first."""
 
 LEAN_TOOL = {
     "name": "record_lean_formalization",
@@ -87,8 +177,11 @@ step of a number theory proof, produce a Python snippet that sets a boolean vari
 `result` to True or False, mechanically evaluating whether the claim holds.
 
 Rules:
-- Only these modules are importable: math, sympy, fractions, itertools, functools, \
-decimal, cmath, statistics, numbers.
+- Do NOT write `import` statements — the sandbox exposes no import machinery at all. These \
+names are already bound and ready to use directly: `math`, `sympy`, `fractions`, \
+`itertools`, `functools`, `decimal`, `cmath`, `statistics`, `numbers`.
+- Do not access dunder attributes (anything starting with `_`, e.g. `__class__`) — the \
+sandbox rejects them at compile time regardless of what you're trying to do with them.
 - The snippet must set a variable literally named `result` — nothing else is read back.
 - No I/O, no randomness, no network access — deterministic computation only.
 - If the step lists earlier established steps, take their conclusions as given (hardcode \

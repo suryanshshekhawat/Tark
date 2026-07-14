@@ -1,7 +1,8 @@
 """Real pipeline: decompose -> per-step formalize + verify -> Report.
 
-CONSTRUCTION_PLAN.md §6, stages 2-5. Stage 6 (separate advisory pass) is
-not wired in yet — Days 9-10.
+CONSTRUCTION_PLAN.md §6, stages 2-5. Stage 6 (the separate advisory pass)
+lives in advisory.py and is invoked by the router after this generator is
+exhausted, since it needs the final verdicts for every step.
 
 Every stage handles its own failures without killing the stream (§4a.5):
 a malformed Claude response or a verifier crash on one step degrades that
@@ -93,13 +94,21 @@ def _code_hash(code: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
+# Neither of these gets a formalization/verification attempt — a PREMISE
+# isn't a claim, and UNFORMALIZABLE means Claude already said it can't be
+# formalized. Both skip straight to a terminal verdict.
+_SKIP_FORMALIZATION = {Classification.UNFORMALIZABLE, Classification.PREMISE}
+
+
 def _build_step(raw: RawStep, normalized_source: str) -> Step:
     source_span = find_span(normalized_source, raw.anchor_text)
     claude_notes = []
-    if raw.classification == Classification.UNFORMALIZABLE and raw.unformalizable_reason:
-        claude_notes.append(
-            ClaudeNote(type=ClaudeNoteType.SUSPICION, text=raw.unformalizable_reason)
-        )
+    if raw.classification in _SKIP_FORMALIZATION and raw.note:
+        claude_notes.append(ClaudeNote(type=ClaudeNoteType.SUSPICION, text=raw.note))
+
+    # PREMISE -> ASSUMED (given, not a claim); UNFORMALIZABLE -> UNVERIFIED
+    # (a claim we couldn't check). Never conflate the two (see CLAUDE.md).
+    verdict = Verdict.ASSUMED if raw.classification == Classification.PREMISE else Verdict.UNVERIFIED
 
     return Step(
         id=raw.id,
@@ -108,7 +117,7 @@ def _build_step(raw: RawStep, normalized_source: str) -> Step:
         depends_on=raw.depends_on,
         classification=raw.classification,
         formalization=None,
-        verdict=Verdict.UNVERIFIED,
+        verdict=verdict,
         verifier=None,
         evidence=None,
         claude_notes=claude_notes,
@@ -406,10 +415,13 @@ async def _decompose_node(state: PipelineState) -> dict:
         "decompose_call duration_s=%.2f steps=%d", time.monotonic() - decompose_start, len(raw_steps),
     )
     steps = [_build_step(raw, state["normalized_source"]) for raw in raw_steps]
-    unformalizable = [s for s in steps if s.classification == Classification.UNFORMALIZABLE]
-    formalizable = [s for s in steps if s.classification != Classification.UNFORMALIZABLE]
+    # PREMISE steps (ASSUMED, not a claim) and UNFORMALIZABLE steps (Claude
+    # already said it can't formalize this) both skip straight to a terminal
+    # verdict — see _SKIP_FORMALIZATION / _build_step above.
+    skipped = [s for s in steps if s.classification in _SKIP_FORMALIZATION]
+    formalizable = [s for s in steps if s.classification not in _SKIP_FORMALIZATION]
     id_to_statement = {s.id: s.statement for s in steps}
-    return {"steps": unformalizable, "formalizable": formalizable, "id_to_statement": id_to_statement}
+    return {"steps": skipped, "formalizable": formalizable, "id_to_statement": id_to_statement}
 
 
 async def _process_step_node(state: StepTask) -> dict:

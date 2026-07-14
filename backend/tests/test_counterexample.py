@@ -44,3 +44,21 @@ def test_disallowed_import_fails_closed():
 def test_filesystem_access_fails_closed():
     found, desc = _run_probe_code("found = bool(open('/etc/hosts'))")
     assert found is False
+
+
+def test_snippet_cannot_escape_via_class_introspection():
+    """The classic RestrictedPython-defeating trick for a naive restricted-
+    builtins sandbox: walk the live object graph via dunder attributes to
+    reach subprocess.Popen without ever calling `import`. This exact pattern
+    was found live against SympyVerifier's original (pre-RestrictedPython)
+    implementation — this probe shares the same runner design, so it must
+    reject it too, not just SympyVerifier."""
+    found, desc = _run_probe_code(
+        "found = 'Popen' in [c.__name__ for c in ().__class__.__base__.__subclasses__()]"
+    )
+    assert found is False
+
+
+def test_snippet_cannot_getattr_dunder():
+    found, desc = _run_probe_code("found = getattr(1, '__class__') is not None")
+    assert found is False

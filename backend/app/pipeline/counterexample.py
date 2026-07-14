@@ -13,6 +13,15 @@ with its own `found`/`counterexample` result shape, so a probe bug or a
 mis-translated claim can never be mistaken for, or accidentally feed into,
 an actual verdict. See CLAUDE.md — a false REFUTED is worse than a missed
 one; this probe is not allowed anywhere near REFUTED at all.
+
+Sandboxing: uses RestrictedPython (compile_restricted + safe_globals +
+safer_getattr), not a hand-rolled restricted-`__builtins__` dict — that
+pattern was proven exploitable directly in `SympyVerifier`'s original
+implementation (`().__class__.__base__.__subclasses__()` reaches every live
+Python class, including `subprocess.Popen`, without ever calling `import`,
+completely bypassing an import allowlist). See sympy_verifier.py and
+CLAUDE.md for the full story; this probe's runner mirrors that fix exactly
+rather than re-introducing the same hole in a second sandboxed subprocess.
 """
 from __future__ import annotations
 
@@ -44,8 +53,11 @@ range) for a concrete counterexample. Set `found` to True/False, and if True, se
 If not concretely testable: call the tool with testable=false and no code.
 
 Rules:
-- Only these modules are importable: math, sympy, fractions, itertools, functools, decimal, \
-cmath, statistics, numbers.
+- Do NOT write `import` statements — the sandbox exposes no import machinery at all. These \
+names are already bound and ready to use directly: `math`, `sympy`, `fractions`, \
+`itertools`, `functools`, `decimal`, `cmath`, `statistics`, `numbers`.
+- Do not access dunder attributes (anything starting with `_`, e.g. `__class__`) — the \
+sandbox rejects them at compile time regardless of what you're trying to do with them.
 - No I/O, no randomness, no network access — deterministic computation only.
 - Keep the search small enough to run in a few seconds (at most a few thousand iterations)."""
 
@@ -65,46 +77,80 @@ PROBE_TOOL = {
     },
 }
 
+# Runs in a *separate* interpreter process, invoked with `-I` (isolated mode:
+# ignores PYTHONPATH/user site). No `__import__` is exposed, so `import X`
+# always fails — the modules below are the entire available surface, handed
+# in as pre-bound names rather than importable ones. Mirrors
+# sympy_verifier.py's RestrictedPython runner exactly (see module docstring
+# for why the naive restricted-builtins-dict approach this used to use is a
+# proven sandbox escape).
 _RUNNER_TEMPLATE = r"""
 import json
+import math
+import operator
+import sympy
+import fractions
+import itertools
+import functools
+import decimal
+import cmath
+import statistics
+import numbers
 
-ALLOWED_MODULES = {
-    "math", "sympy", "fractions", "itertools", "functools", "decimal",
-    "cmath", "statistics", "numbers",
+from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython.Eval import default_guarded_getitem
+from RestrictedPython.Guards import (
+    full_write_guard,
+    guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
+    safer_getattr,
+)
+
+_INPLACE_OPS = {
+    "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
+    "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
+    "**=": operator.ipow,
 }
 
-def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
-    root = name.split(".")[0]
-    if root not in ALLOWED_MODULES:
-        raise ImportError(f"import of '{name}' is not allowed in the sandbox")
-    return __import__(name, globals, locals, fromlist, level)
-
-SAFE_BUILTINS = {
-    name: getattr(__builtins__, name)
-    for name in (
-        "abs", "all", "any", "bool", "dict", "enumerate", "float", "frozenset",
-        "int", "len", "list", "max", "min", "pow", "range", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "zip", "True",
-        "False", "None",
-    )
-    if hasattr(__builtins__, name)
-}
-SAFE_BUILTINS["__import__"] = _restricted_import
+def _inplacevar_(op, x, y):
+    if op not in _INPLACE_OPS:
+        raise TypeError(f"augmented assignment {op!r} is not allowed")
+    return _INPLACE_OPS[op](x, y)
 
 def _run():
-    import math
-    import sympy
-    namespace = {"__builtins__": SAFE_BUILTINS, "sympy": sympy, "math": math}
     try:
-        exec(USER_CODE, namespace)
+        byte_code = compile_restricted(USER_CODE, filename="<snippet>", mode="exec")
+    except SyntaxError as exc:
+        print(json.dumps({"ok": False, "error": f"SyntaxError: {exc}"}))
+        return
+
+    restricted_globals = dict(safe_globals)
+    # See sympy_verifier.py for why every one of these seven guard hooks is
+    # required, not just the ones that come up first in ad hoc testing.
+    restricted_globals["_getattr_"] = safer_getattr
+    restricted_globals["_getitem_"] = default_guarded_getitem
+    restricted_globals["_getiter_"] = iter
+    restricted_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
+    restricted_globals["_unpack_sequence_"] = guarded_unpack_sequence
+    restricted_globals["_inplacevar_"] = _inplacevar_
+    restricted_globals["_write_"] = full_write_guard
+    restricted_globals.update({
+        "math": math, "sympy": sympy, "fractions": fractions,
+        "itertools": itertools, "functools": functools, "decimal": decimal,
+        "cmath": cmath, "statistics": statistics, "numbers": numbers,
+    })
+
+    try:
+        exec(byte_code, restricted_globals)
     except Exception as exc:  # noqa: BLE001 - must report, never crash silently
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
         return
-    found = namespace.get("found")
+
+    found = restricted_globals.get("found")
     if not isinstance(found, bool):
         print(json.dumps({"ok": False, "error": "snippet did not set `found` to a bool"}))
         return
-    counterexample = namespace.get("counterexample")
+    counterexample = restricted_globals.get("counterexample")
     print(json.dumps({
         "ok": True,
         "found": found,
@@ -116,12 +162,13 @@ _run()
 
 
 def _run_probe_code(code: str, timeout: float = PROBE_TIMEOUT) -> tuple[bool, str | None]:
-    """Runs in a fresh, restricted subprocess — the same sandboxing pattern
-    as SympyVerifier (separate process, restricted builtins, no filesystem/
-    network access, timeout), but its own runner and result shape so this
-    can never be confused with a verdict-producing check. Never raises;
-    any failure just means "no counterexample found" — fail closed on the
-    advisory note, exactly as if the probe were never run at all.
+    """Runs in a fresh, RestrictedPython-sandboxed subprocess — the same
+    sandboxing pattern as SympyVerifier (separate process, compile-time
+    dunder/import rejection, no filesystem/network access, timeout), but its
+    own runner and result shape so this can never be confused with a
+    verdict-producing check. Never raises; any failure just means "no
+    counterexample found" — fail closed on the advisory note, exactly as if
+    the probe were never run at all.
     """
     runner_source = "USER_CODE = " + repr(code) + "\n" + _RUNNER_TEMPLATE
     with tempfile.TemporaryDirectory() as tmp_dir:

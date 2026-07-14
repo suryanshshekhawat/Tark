@@ -15,6 +15,7 @@ export function SummaryHeader({ report }: { report: Report }) {
       <div className="summary-status">{STATUS_LABEL[report.overall_status]}</div>
       <div className="summary-count">
         {report.steps_verified}/{report.steps_total} verified
+        {report.steps_assumed > 0 && ` · ${report.steps_assumed} assumed`}
       </div>
     </div>
   );

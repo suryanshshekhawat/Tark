@@ -1,9 +1,13 @@
 """SymPy / computational verifier backend — CONSTRUCTION_PLAN.md §9.
 
 Claude-generated snippets are untrusted. They run in a fresh subprocess (not
-`eval()` in-process), with restricted builtins and no filesystem/network
-access, under a short timeout. The convention: the snippet must set a
-variable named `result` to True/False — that's the entire verdict surface.
+`eval()` in-process), compiled with RestrictedPython rather than a hand-rolled
+restricted-builtins dict — a plain `exec(code, {"__builtins__": {...safe...}})`
+is escapable: `().__class__.__base__.__subclasses__()` reaches every live
+Python class (including `subprocess.Popen`) without ever calling `import`,
+bypassing any import allowlist entirely. Verified this directly against the
+old implementation before switching. RestrictedPython rejects dunder
+attribute access (`__class__`, `__globals__`, ...) at compile time.
 """
 from __future__ import annotations
 
@@ -18,50 +22,82 @@ from .base import Verifier, VerdictResult
 
 DEFAULT_TIMEOUT = 8.0  # seconds — §9: ~5-10s
 
-# Runs in a *separate* interpreter process. Restricted builtins block
-# filesystem/network/process access; only a small safe subset plus sympy
-# is reachable. Emits a single JSON line to stdout: the only channel the
-# parent trusts.
+# Runs in a *separate* interpreter process, invoked with `-I` (isolated mode:
+# ignores PYTHONPATH/user site). No `__import__` is exposed, so `import X`
+# always fails — the modules below are the entire available surface, handed
+# in as pre-bound names rather than importable ones.
 _RUNNER_TEMPLATE = r"""
 import json
-import sys
+import math
+import operator
+import sympy
+import fractions
+import itertools
+import functools
+import decimal
+import cmath
+import statistics
+import numbers
 
-ALLOWED_MODULES = {
-    "math", "sympy", "fractions", "itertools", "functools", "decimal",
-    "cmath", "statistics", "numbers",
+from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython.Eval import default_guarded_getitem
+from RestrictedPython.Guards import (
+    full_write_guard,
+    guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
+    safer_getattr,
+)
+
+_INPLACE_OPS = {
+    "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
+    "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
+    "**=": operator.ipow,
 }
 
-def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
-    root = name.split(".")[0]
-    if root not in ALLOWED_MODULES:
-        raise ImportError(f"import of '{name}' is not allowed in the sandbox")
-    return __import__(name, globals, locals, fromlist, level)
-
-SAFE_BUILTINS = {
-    name: getattr(__builtins__, name)
-    for name in (
-        "abs", "all", "any", "bool", "dict", "enumerate", "float", "frozenset",
-        "int", "len", "list", "max", "min", "pow", "range", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "zip", "True",
-        "False", "None",
-    )
-    if hasattr(__builtins__, name)
-}
-SAFE_BUILTINS["__import__"] = _restricted_import
+def _inplacevar_(op, x, y):
+    if op not in _INPLACE_OPS:
+        raise TypeError(f"augmented assignment {op!r} is not allowed")
+    return _INPLACE_OPS[op](x, y)
 
 def _run():
-    import math
-    import sympy
-    namespace = {"__builtins__": SAFE_BUILTINS, "sympy": sympy, "math": math}
     try:
-        exec(USER_CODE, namespace)
+        byte_code = compile_restricted(USER_CODE, filename="<snippet>", mode="exec")
+    except SyntaxError as exc:
+        print(json.dumps({"ok": False, "error": f"SyntaxError: {exc}"}))
+        return
+
+    restricted_globals = dict(safe_globals)
+    # RestrictedPython's compiled bytecode calls out to these seven guard
+    # hooks for ordinary Python constructs (attribute access, subscripting,
+    # iteration, unpacking, augmented assignment, writes) — there is no
+    # built-in default for any of them, `safe_globals` supplies none of
+    # them, and a missing one doesn't fail loudly: the snippet just dies
+    # with a bare, misleading NameError. This list was pulled directly from
+    # RestrictedPython's transformer source (every `ast.Name('_..._')` it
+    # emits), not assembled by discovering gaps one at a time.
+    restricted_globals["_getattr_"] = safer_getattr
+    restricted_globals["_getitem_"] = default_guarded_getitem
+    restricted_globals["_getiter_"] = iter
+    restricted_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
+    restricted_globals["_unpack_sequence_"] = guarded_unpack_sequence
+    restricted_globals["_inplacevar_"] = _inplacevar_
+    restricted_globals["_write_"] = full_write_guard
+    restricted_globals.update({
+        "math": math, "sympy": sympy, "fractions": fractions,
+        "itertools": itertools, "functools": functools, "decimal": decimal,
+        "cmath": cmath, "statistics": statistics, "numbers": numbers,
+    })
+
+    try:
+        exec(byte_code, restricted_globals)
     except Exception as exc:  # noqa: BLE001 - must report, never crash silently
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
         return
-    if "result" not in namespace:
+
+    if "result" not in restricted_globals:
         print(json.dumps({"ok": False, "error": "snippet did not set a `result` variable"}))
         return
-    result = namespace["result"]
+    result = restricted_globals["result"]
     if not isinstance(result, bool):
         print(json.dumps({"ok": False, "error": f"`result` must be bool, got {type(result).__name__}"}))
         return
