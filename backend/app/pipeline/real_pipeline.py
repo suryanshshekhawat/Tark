@@ -27,10 +27,19 @@ _sympy_verifier = SympyVerifier()
 
 # Each Lean check is a heavy subprocess (elaborating a Mathlib import chain).
 # Firing off one per step with no cap causes them to contend for CPU/disk and
-# every single one blows its 30s timeout — observed directly on an 11-step
-# proof (8 cores, all-timeout with unbounded concurrency). Cap concurrent
-# Lean subprocesses; SymPy checks are cheap and don't need this.
-_LEAN_CONCURRENCY_LIMIT = 3
+# every single one blows its timeout — observed directly on an 11-step proof
+# (8 cores, all-timeout with unbounded concurrency). Cap concurrent Lean
+# subprocesses; SymPy checks are cheap and don't need this.
+#
+# Lowered from 3 to 2 after a second live regression: with only ~2GB free
+# RAM on this dev machine, even 3 concurrent Mathlib environment loads caused
+# every check to time out — including ones independently verified to compile
+# in ~14s alone. Same code, same imports, only difference was concurrency
+# level plus ambient system memory pressure at the time. If checks are still
+# timing out with this lower limit, the fix is freeing memory / reducing this
+# further, not touching the formalization prompt — the failure is
+# infrastructure contention, not formalization quality. See CLAUDE.md.
+_LEAN_CONCURRENCY_LIMIT = 2
 _lean_semaphore = asyncio.Semaphore(_LEAN_CONCURRENCY_LIMIT)
 
 # §8.3 / §11: cap at 3 attempts total per step.

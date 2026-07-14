@@ -3,13 +3,13 @@ from app.verifiers.sympy_verifier import SympyVerifier
 
 
 def test_true_claim_verifies():
-    res = SympyVerifier().check("result = __import__('sympy').isprime(1000003)")
+    res = SympyVerifier().check("result = sympy.isprime(1000003)")
     assert res.verdict == Verdict.VERIFIED
     assert res.verifier == VerifierName.SYMPY
 
 
 def test_false_claim_refutes():
-    res = SympyVerifier().check("result = __import__('math').gcd(48, 18) == 5")
+    res = SympyVerifier().check("result = math.gcd(48, 18) == 5")
     assert res.verdict == Verdict.REFUTED
 
 
@@ -27,3 +27,26 @@ def test_snippet_cannot_read_filesystem():
     res = SympyVerifier().check("result = bool(open('C:/Windows/win.ini'))")
     assert res.verdict == Verdict.UNVERIFIED
     assert "NameError" in res.evidence.raw_output or "not defined" in res.evidence.raw_output
+
+
+def test_snippet_cannot_import_arbitrary_modules():
+    res = SympyVerifier().check("import os\nresult = True")
+    assert res.verdict == Verdict.UNVERIFIED
+    assert "ImportError" in res.evidence.raw_output or "__import__" in res.evidence.raw_output
+
+
+def test_snippet_cannot_escape_via_class_introspection():
+    """The classic RestrictedPython-defeating trick for a naive restricted-
+    builtins sandbox: walk the live object graph via dunder attributes to
+    reach subprocess.Popen without ever calling `import`. Must be rejected
+    at compile time, not merely fail to find something dangerous."""
+    res = SympyVerifier().check(
+        "result = 'Popen' in [c.__name__ for c in ().__class__.__base__.__subclasses__()]"
+    )
+    assert res.verdict == Verdict.UNVERIFIED
+    assert "invalid attribute name" in res.evidence.raw_output or "SyntaxError" in res.evidence.raw_output
+
+
+def test_snippet_cannot_getattr_dunder():
+    res = SympyVerifier().check("result = getattr(1, '__class__') is not None")
+    assert res.verdict == Verdict.UNVERIFIED

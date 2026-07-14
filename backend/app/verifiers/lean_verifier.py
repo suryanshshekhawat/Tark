@@ -18,7 +18,7 @@ from .base import Verifier, VerdictResult
 LEAN_PROJECT_DIR = Path(__file__).resolve().parents[3] / "tark_lean"
 SCRATCH_DIR = LEAN_PROJECT_DIR / ".tark_scratch"
 
-DEFAULT_TIMEOUT = 30.0  # seconds — §8.2: 20-30s hard timeout (upper bound; see notes below)
+DEFAULT_TIMEOUT = 45.0  # seconds — see notes below for why this is above §8.2's 20-30s suggestion
 
 # `import Mathlib` (the whole library) takes 50s+ per cold subprocess even
 # with the prebuilt .olean cache — it blows the timeout above. Formalization
@@ -30,6 +30,16 @@ DEFAULT_TIMEOUT = 30.0  # seconds — §8.2: 20-30s hard timeout (upper bound; s
 # The gap is disk I/O for the .olean dependency chain, not elaboration —
 # expect the first check after a backend restart to be noticeably slower
 # than subsequent ones.
+#
+# §8.2 suggests 20-30s; this is intentionally higher. Measured directly:
+# `import Mathlib.Analysis.Real.Sqrt` alone (proved by testing it against a
+# *trivial* goal, isolating import cost from proof cost) takes ~25s warm on
+# this environment — the tactics on top of it cost almost nothing. A 30s cap
+# would make every Real-number step time out regardless of whether the
+# formalization is correct, which isn't "genuinely too hard to verify", it's
+# "the timeout is shorter than baseline import cost." 45s gives real-analysis
+# steps (rare, but they do occur — e.g. squaring a sqrt(2) = p/q equation)
+# enough room while still bounding the worst case.
 
 
 def _kill_process_tree(pid: int) -> None:

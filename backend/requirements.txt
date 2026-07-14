@@ -1,4 +1,5 @@
 anthropic==0.116.0
+RestrictedPython==8.4
 fastapi==0.139.0
 httpx==0.28.1
 pydantic==2.13.4

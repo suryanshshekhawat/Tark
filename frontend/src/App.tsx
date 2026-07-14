@@ -8,11 +8,24 @@ import { StepSidebar } from "./components/StepSidebar";
 import { SummaryHeader } from "./components/SummaryHeader";
 import type { AutoRepair, IngestError, Report, Step } from "./types";
 
-const EXAMPLE_PROOF = String.raw`Suppose, for contradiction, that $\sqrt{2}$ is rational. Then
+const EXAMPLES: { label: string; latex: string }[] = [
+  {
+    label: "√2 irrational",
+    latex: String.raw`Suppose, for contradiction, that $\sqrt{2}$ is rational. Then
 $\sqrt{2} = p/q$ for some integers $p, q$ with $\gcd(p, q) = 1$.
 Squaring both sides gives $p^2 = 2q^2$, so $p^2$ is even, so $p$ is even.
 Write $p = 2k$. Then $4k^2 = 2q^2$, so $q^2 = 2k^2$, so $q$ is also even.
-But this contradicts $\gcd(p, q) = 1$. Hence $\sqrt{2}$ is irrational.`;
+But this contradicts $\gcd(p, q) = 1$. Hence $\sqrt{2}$ is irrational.`,
+  },
+  {
+    label: "gcd & primality",
+    latex: String.raw`We compute that $\gcd(48, 18) = 6$. Also, $1000003$ is prime. However, $\gcd(100, 45) = 10$.`,
+  },
+  {
+    label: "even squares",
+    latex: String.raw`Let $n$ be an even integer, so $n = 2k$ for some integer $k$. Then $n^2 = 4k^2 = 2(2k^2)$, so $n^2$ is even.`,
+  },
+];
 
 type Stage = "input" | "preview" | "result";
 type Status = "idle" | "streaming" | "error" | "done";
@@ -115,9 +128,11 @@ function App() {
             <button onClick={() => setStage("preview")} disabled={!latex.trim()}>
               Preview
             </button>
-            <button className="secondary" onClick={() => setLatex(EXAMPLE_PROOF)}>
-              Load example
-            </button>
+            {EXAMPLES.map((ex) => (
+              <button key={ex.label} className="secondary" onClick={() => setLatex(ex.latex)}>
+                {ex.label}
+              </button>
+            ))}
           </div>
         </section>
       )}

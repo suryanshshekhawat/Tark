@@ -29,10 +29,21 @@ export function StepCard({ step }: { step: Step }) {
 
       <span className="classification-chip">{step.classification}</span>
 
-      {step.evidence && (
+      {(step.formalization?.lean_code || step.formalization?.python_code || step.evidence) && (
         <details className="evidence">
           <summary>Evidence</summary>
-          <pre>{step.evidence.raw_output}</pre>
+          {(step.formalization?.lean_code || step.formalization?.python_code) && (
+            <>
+              <div className="evidence-label">Code checked</div>
+              <pre>{step.formalization.lean_code || step.formalization.python_code}</pre>
+            </>
+          )}
+          {step.evidence && (
+            <>
+              <div className="evidence-label">Output</div>
+              <pre>{step.evidence.raw_output}</pre>
+            </>
+          )}
         </details>
       )}
 
