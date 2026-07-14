@@ -130,10 +130,14 @@ class DecompositionError(Exception):
 
 
 DECOMPOSE_MAX_TOKENS = 8192
+# Empty-steps responses have been observed to be sampling-variance, not
+# deterministic — the same input succeeds on a retry. Bounded to 2 total
+# attempts; NOT applied to a max_tokens truncation, which is a deterministic
+# function of input size and will just truncate identically again.
+MAX_EMPTY_RETRIES = 1
 
 
-async def decompose(normalized_source: str) -> list[RawStep]:
-    client = get_client()
+async def _decompose_once(client, normalized_source: str) -> list[RawStep]:
     response = await client.messages.create(
         model=settings.claude_model,
         max_tokens=DECOMPOSE_MAX_TOKENS,
@@ -153,7 +157,8 @@ async def decompose(normalized_source: str) -> list[RawStep]:
         # salvaged (often an empty dict) is not a real decomposition. Long,
         # multi-proof inputs are the common trigger; say so specifically
         # rather than the misleading "returned no steps" a truncated call
-        # would otherwise produce.
+        # would otherwise produce. Not retried — same input, same size, same
+        # truncation point.
         raise DecompositionError(
             "This input is too long to decompose in a single pass (Claude's response was "
             "cut off before finishing). Try pasting a single, shorter proof rather than a "
@@ -206,5 +211,20 @@ async def decompose(normalized_source: str) -> list[RawStep]:
         raise DecompositionError(
             "Claude's decomposition returned steps, but none could be parsed."
         )
+
+    return steps
+
+
+async def decompose(normalized_source: str) -> list[RawStep]:
+    client = get_client()
+    last_error: DecompositionError | None = None
+    for attempt in range(MAX_EMPTY_RETRIES + 1):
+        try:
+            return await _decompose_once(client, normalized_source)
+        except DecompositionError as exc:
+            if "too long to decompose" in str(exc):
+                raise  # deterministic given input size — retrying won't help
+            last_error = exc
+    raise last_error
 
     return steps

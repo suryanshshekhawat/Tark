@@ -42,6 +42,23 @@ class _FakeClient:
         self.messages = _FakeMessages(self.response)
 
 
+@dataclass
+class _SequencedMessages:
+    responses: list
+
+    async def create(self, **kwargs):
+        return self.responses.pop(0)
+
+
+@dataclass
+class _SequencedClient:
+    responses: list
+    messages: _SequencedMessages = field(init=False)
+
+    def __post_init__(self):
+        self.messages = _SequencedMessages(list(self.responses))
+
+
 def _patched_client(response: _FakeResponse):
     return patch("app.pipeline.decompose.get_client", return_value=_FakeClient(response))
 
@@ -142,3 +159,43 @@ async def test_empty_steps_list_raises():
     response = _FakeResponse(content=[_FakeToolUseBlock(input={"steps": []})])
     with pytest.raises(DecompositionError, match="returned no steps"):
         await _run(response)
+
+
+@pytest.mark.asyncio
+async def test_empty_steps_retries_and_succeeds_on_second_attempt():
+    """Empty-steps has been observed to be sampling variance, not a
+    deterministic function of the input — a bare retry on the identical
+    input has succeeded. Confirm decompose() actually retries rather than
+    failing on the first empty response."""
+    empty = _FakeResponse(content=[_FakeToolUseBlock(input={"steps": []})])
+    good_steps = {
+        "steps": [
+            {
+                "id": "S1",
+                "statement": "n is even",
+                "depends_on": [],
+                "classification": "premise",
+                "anchor_text": "n is even",
+            }
+        ]
+    }
+    good = _FakeResponse(content=[_FakeToolUseBlock(input=good_steps)])
+
+    with patch(
+        "app.pipeline.decompose.get_client",
+        return_value=_SequencedClient([empty, good]),
+    ):
+        result = await decompose("some normalized latex source")
+    assert len(result) == 1
+    assert result[0].id == "S1"
+
+
+@pytest.mark.asyncio
+async def test_empty_steps_exhausts_retries_then_raises():
+    empty = _FakeResponse(content=[_FakeToolUseBlock(input={"steps": []})])
+    with patch(
+        "app.pipeline.decompose.get_client",
+        return_value=_SequencedClient([empty, empty]),
+    ):
+        with pytest.raises(DecompositionError, match="returned no steps"):
+            await decompose("some normalized latex source")
