@@ -112,6 +112,28 @@ Conventions:
   Python sandboxing again, don't — verify against the class-introspection
   trick specifically before trusting it (see `test_sympy_verifier.py`'s
   `test_snippet_cannot_escape_via_class_introspection`).
+- RestrictedPython requires the *embedder* to supply guard functions for
+  several ordinary-looking constructs — there's no built-in default. Missing
+  one doesn't fail loudly; the snippet just dies with a bare, misleading
+  NameError (`name '_unpack_sequence_' is not defined`) that gives no hint
+  what's actually missing. Found live, via the UI, not a test: idiomatic
+  sympy code constantly does `n, k = sympy.symbols(...)` (needs
+  `_unpack_sequence_`), `for p, e in d.items():` (needs
+  `_iter_unpack_sequence_`), and `total += x` (needs `_inplacevar_`, which
+  has no default implementation at all — see `sympy_verifier.py` for a safe
+  one built on `operator`). If SymPy snippets start failing with a
+  NameError on an underscore-prefixed name, it's almost certainly a missing
+  guard, not a real problem with the snippet — check
+  `RestrictedPython/Guards.py` for what exists before assuming the sandbox
+  is just broken for that code shape.
+- Decomposition classification: "does this look like arithmetic" is the
+  wrong test for `computational` vs `lean_candidate` — the actual dividing
+  line is "are there free variables." `n^2 = 4k^2 = 2(2k^2)` (general n, k)
+  was getting classified `computational` despite having no concrete numbers
+  at all, because it superficially resembles a calculation. It isn't one —
+  there's no single computation that decides a claim quantified over all
+  integers. Any letter standing for an arbitrary integer means
+  `lean_candidate`, full stop, regardless of how simple the algebra looks.
 - `LeanVerifier`'s sandboxing is narrower in scope than SymPy's needs to be:
   Claude is prompted for a `theorem ... := by <tactics>` file, not arbitrary
   `#eval`/`IO` code, so there's no equivalent to Python's `exec()` executing
