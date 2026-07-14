@@ -29,6 +29,7 @@ DEFAULT_TIMEOUT = 8.0  # seconds — §9: ~5-10s
 _RUNNER_TEMPLATE = r"""
 import json
 import math
+import operator
 import sympy
 import fractions
 import itertools
@@ -39,7 +40,22 @@ import statistics
 import numbers
 
 from RestrictedPython import compile_restricted, safe_globals
-from RestrictedPython.Guards import safer_getattr
+from RestrictedPython.Guards import (
+    guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
+    safer_getattr,
+)
+
+_INPLACE_OPS = {
+    "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
+    "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
+    "**=": operator.ipow,
+}
+
+def _inplacevar_(op, x, y):
+    if op not in _INPLACE_OPS:
+        raise TypeError(f"augmented assignment {op!r} is not allowed")
+    return _INPLACE_OPS[op](x, y)
 
 def _run():
     try:
@@ -50,6 +66,16 @@ def _run():
 
     restricted_globals = dict(safe_globals)
     restricted_globals["_getattr_"] = safer_getattr
+    # Tuple-unpacking assignment (`n, k = sympy.symbols(...)`), unpacking in
+    # a `for` (`for p, e in factorint(n).items():`), and augmented
+    # assignment (`total += x`) each compile to a call to one of these
+    # guards — idiomatic sympy code uses all three constantly, and without
+    # them every such snippet dies with a bare NameError that looks nothing
+    # like what actually went wrong.
+    restricted_globals["_getiter_"] = iter
+    restricted_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
+    restricted_globals["_unpack_sequence_"] = guarded_unpack_sequence
+    restricted_globals["_inplacevar_"] = _inplacevar_
     restricted_globals.update({
         "math": math, "sympy": sympy, "fractions": fractions,
         "itertools": itertools, "functools": functools, "decimal": decimal,

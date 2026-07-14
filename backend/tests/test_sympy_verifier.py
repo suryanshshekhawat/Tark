@@ -50,3 +50,26 @@ def test_snippet_cannot_escape_via_class_introspection():
 def test_snippet_cannot_getattr_dunder():
     res = SympyVerifier().check("result = getattr(1, '__class__') is not None")
     assert res.verdict == Verdict.UNVERIFIED
+
+
+def test_tuple_unpack_assignment_works():
+    """Idiomatic sympy usage (`n, k = sympy.symbols(...)`) — RestrictedPython
+    compiles unpacking assignment to a call to a `_unpack_sequence_` guard;
+    without it every such snippet fails with a misleading bare NameError."""
+    res = SympyVerifier().check(
+        "n, k = sympy.symbols('n k', integer=True)\n"
+        "lhs = (2 * k) ** 2\n"
+        "rhs = 2 * (2 * k ** 2)\n"
+        "result = sympy.simplify(lhs - rhs) == 0"
+    )
+    assert res.verdict == Verdict.VERIFIED
+
+
+def test_for_loop_unpack_works():
+    res = SympyVerifier().check(
+        "total = 0\n"
+        "for base, exp in {2: 1, 3: 1}.items():\n"
+        "    total += base * exp\n"
+        "result = total == 5"
+    )
+    assert res.verdict == Verdict.VERIFIED

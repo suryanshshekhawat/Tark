@@ -28,9 +28,16 @@ notation is fine).
 - classification, exactly one of:
   - "lean_candidate": a precise mathematical claim that could plausibly be stated and \
 proved as a Lean 4 theorem using Mathlib (divisibility, gcd, parity, modular arithmetic, \
-irrationality, etc).
-  - "computational": a concrete, decidable numerical claim best checked by direct \
-computation (e.g. "gcd(48,18)=6", "1000003 is prime").
+irrationality, etc). This includes algebraic identities/manipulations over FREE VARIABLES \
+(e.g. "n^2 = 4k^2 = 2(2k^2)" for general n, k) — a step being simple algebra does not make \
+it computational; what makes it computational is having no free variables at all.
+  - "computational": a claim about SPECIFIC, CONCRETE NUMBERS with no free variables — \
+every quantity in the statement is a literal number, not a symbol standing for an arbitrary \
+integer (e.g. "gcd(48,18)=6", "1000003 is prime", "17^2 = 289"). If the statement contains \
+any letter that represents an arbitrary/unspecified integer (n, k, p, q, ...), it is NOT \
+computational, even if the claim is a one-line algebraic identity — classify it \
+"lean_candidate" instead, since there's no single computation that decides a claim about \
+all integers.
   - "premise": NOT a claim at all — a stipulation, hypothesis, or proof-strategy setup \
 that the proof simply assumes or introduces ("suppose, for contradiction, that ..."; \
 "let p, q be integers with ..."; "write p = 2k for some integer k"). There is nothing to \
