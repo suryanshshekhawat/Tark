@@ -1,6 +1,8 @@
 # Tark
 
-Read CONSTRUCTION_PLAN.md fully before doing any work — it is the spec.
+If HANDOFF.md exists, read it first — it's a short priority list for picking
+this project back up. Then read CONSTRUCTION_PLAN.md fully before doing any
+work — it is the spec.
 Core principle: Claude never asserts correctness. Only Lean 4 (via Mathlib)
 or SymPy execution can produce a VERIFIED/REFUTED verdict. Anything else is
 UNVERIFIED. Don't violate this anywhere, including in error-handling paths.
