@@ -218,3 +218,70 @@ Conventions:
   normalize cleanly. `obtain ⟨q, hq⟩ : ∃ q, 2 * p = q + 1 := ...` first, to
   get a fresh opaque variable with no self-reference, then rewrite with
   that.
+- The frontend's landing-page LaTeX field must be a `<textarea>`, never a
+  single-line `<input>` — an `<input>` silently strips newline characters
+  from both typed and programmatically-set values, which would silently
+  corrupt any real multi-line proof before decomposition ever saw it. Found
+  live: a pasted multi-line Wilson's-theorem proof collapsed to one giant
+  source line, which then broke every downstream line-based lookup in a
+  confusing way (looked like a decomposition/highlighting bug, wasn't).
+- SyncTeX's box granularity is **per source line**, not per character, for
+  ordinary running prose under pdfTeX — confirmed directly, not assumed:
+  querying `synctex view` for the same line at deliberately different
+  columns (1, 45, 90) returned byte-identical boxes every time. This means
+  a SyncTeX-based approach can never separate multiple statements that sit
+  on the same source line (e.g. a compact "gcd(48,18)=6. Also, 1000003 is
+  prime. However, gcd(100,45)=10." all on one line) — no amount of query
+  tuning fixes it, because the compiler itself never recorded finer
+  position data for that content. Tried both a SyncTeX-based backend
+  approach and a character-count proportional-split heuristic on top of it
+  before concluding this and moving highlighting to the frontend instead,
+  matching each step's source text against the compiled PDF's own
+  `pdf.js` text layer (`frontend/src/textLayerMatch.ts`) — real glyph
+  positions, not compiler-internal box structure. Don't resurrect a
+  SyncTeX-box approach for sub-line highlighting; it structurally cannot
+  work for prose with multiple claims per line.
+- Matching LaTeX *source* text against a compiled PDF's *rendered* text
+  needs an explicit command classifier, not just "strip the backslash and
+  keep the letters." That default is correct for commands that render as
+  their own name (`\gcd` → "gcd", `\sin` → "sin"), but wrong for commands
+  that render as a symbol, spacing, or nothing (`\equiv` → "≡", `\cdot` →
+  "·", `\Rightarrow` → "⇒", `\quad` → whitespace, `\text{...}`/`\textbf{...}`
+  → just their braced argument, unstyled). Left unhandled, `\equiv` becomes
+  the literal search word "equiv", which structurally cannot appear in the
+  PDF's rendered text — this silently killed highlighting for every
+  display-math statement in a proof (anything with `\equiv`, `\pmod`,
+  `\cdot`, `\Rightarrow`, `\text`, etc.) while prose-only statements matched
+  fine, which is exactly the asymmetry that made it findable. Fixed with an
+  explicit `SYMBOL_OR_STRUCTURAL_COMMANDS` set in `textLayerMatch.ts` that
+  drops those commands entirely before matching (plus a couple of
+  special-cased substitutions like `\pmod{n}` → `"mod n"` for commands
+  whose rendered text doesn't fit either pattern) — not exhaustive LaTeX
+  coverage, just what's actually shown up in real proofs so far.
+- The backend (`uvicorn`) is run **without** `--reload` in this project's
+  `.claude/launch.json` — every backend code change needs an explicit
+  manual restart before it takes effect. Forgetting this produced a
+  confusing false alarm this session: a user report of "the pipeline is
+  broken!" (a new SSE event silently never appearing) was just the backend
+  still running the pre-edit code. Check server logs / restart before
+  debugging application logic when a backend change doesn't seem to have
+  landed.
+- MiKTeX's on-the-fly package installer defaults to interactive "ask me"
+  mode, which hangs a `pdflatex` subprocess indefinitely the first time it
+  needs any package not yet cached locally (no prompt ever appears in a
+  subprocess context, it just hangs). Set
+  `initexmf --set-config-value=[MPM]AutoInstall=1` once per machine to make
+  it install silently instead — already done on this dev machine. If PDF
+  compilation hangs (not fails, hangs) on a different machine, check this
+  first before assuming a pipeline bug.
+- No frontend guard against concurrent `/api/verify` submissions caused a
+  real, confusing bug: duplicate/rapid clicks (or, live, some automation
+  retry behavior) fired multiple overlapping SSE streams that all appended
+  into the same React `steps` state, producing what looked like the same
+  statement id showing wildly different, contradictory classifications and
+  highlight boxes across runs. It wasn't a matching or pipeline bug, it was
+  literally two decompositions' results interleaved. Fixed with a simple
+  `if (status === "streaming") return;` guard at the top of `handleVerify`
+  in `App.tsx`. If step data ever looks internally inconsistent again
+  (same id, contradictory content) suspect overlapping requests before
+  suspecting the matching/verification logic.
