@@ -12,15 +12,30 @@ steps still get reported.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
-from ..models.schema import ClaudeNote, ClaudeNoteType, Classification, Evidence, Formalization, Step, Verdict
+from ..models.schema import (
+    ClaudeNote,
+    ClaudeNoteType,
+    Classification,
+    Evidence,
+    Formalization,
+    Step,
+    StepAttempt,
+    Verdict,
+)
 from ..verifiers.base import VerdictResult
 from ..verifiers.lean_verifier import LeanVerifier
 from ..verifiers.sympy_verifier import SympyVerifier
 from .decompose import RawStep, decompose
 from .formalize import formalize, formalize_lean_repair
 from .span_matching import find_span
+
+# Called with a StepAttempt right after each individual formalize/verify
+# attempt finishes (before the repair loop decides whether to retry) — how
+# progress reaches the SSE stream live, instead of the frontend only learning
+# a step's whole attempt history at once when its final Step arrives.
+AttemptEmitter = Callable[[StepAttempt], Awaitable[None]]
 
 _lean_verifier = LeanVerifier()
 _sympy_verifier = SympyVerifier()
@@ -99,7 +114,7 @@ def _is_retryable(result: VerdictResult) -> bool:
     return "timed out" not in result.evidence.raw_output.lower()
 
 
-async def _verify_lean_with_repair(step: Step, first_attempt_code: str) -> Step:
+async def _verify_lean_with_repair(step: Step, first_attempt_code: str, emit: AttemptEmitter) -> Step:
     code = first_attempt_code
     for attempt in range(1, MAX_LEAN_ATTEMPTS + 1):
         step.formalization = Formalization(lean_code=code, attempts=attempt)
@@ -113,11 +128,13 @@ async def _verify_lean_with_repair(step: Step, first_attempt_code: str) -> Step:
         except Exception as exc:  # noqa: BLE001 - never crash the stream
             step.evidence = Evidence(raw_output=f"Verifier crashed: {exc}", exit_code=None)
             step.verdict = Verdict.UNVERIFIED
+            await emit(StepAttempt(step_id=step.id, attempt=attempt, verdict=step.verdict))
             return step
 
         step.verdict = result.verdict
         step.verifier = result.verifier
         step.evidence = result.evidence
+        await emit(StepAttempt(step_id=step.id, attempt=attempt, verdict=step.verdict))
 
         if result.verdict == Verdict.VERIFIED:
             return step
@@ -132,17 +149,18 @@ async def _verify_lean_with_repair(step: Step, first_attempt_code: str) -> Step:
     return step
 
 
-async def _formalize_and_verify(step: Step) -> Step:
+async def _formalize_and_verify(step: Step, emit: AttemptEmitter) -> Step:
     try:
         lean_code, python_code = await formalize(step.classification, step.statement)
     except Exception as exc:  # noqa: BLE001 - must degrade to UNVERIFIED, never crash the stream
         step.formalization = Formalization(attempts=1)
         step.evidence = Evidence(raw_output=f"Formalization failed: {exc}", exit_code=None)
         step.verdict = Verdict.UNVERIFIED
+        await emit(StepAttempt(step_id=step.id, attempt=1, verdict=step.verdict))
         return step
 
     if step.classification == Classification.LEAN_CANDIDATE:
-        return await _verify_lean_with_repair(step, lean_code)
+        return await _verify_lean_with_repair(step, lean_code, emit)
 
     step.formalization = Formalization(python_code=python_code, attempts=1)
     try:
@@ -150,11 +168,13 @@ async def _formalize_and_verify(step: Step) -> Step:
     except Exception as exc:  # noqa: BLE001
         step.evidence = Evidence(raw_output=f"Verifier crashed: {exc}", exit_code=None)
         step.verdict = Verdict.UNVERIFIED
+        await emit(StepAttempt(step_id=step.id, attempt=1, verdict=step.verdict))
         return step
 
     step.verdict = result.verdict
     step.verifier = result.verifier
     step.evidence = result.evidence
+    await emit(StepAttempt(step_id=step.id, attempt=1, verdict=step.verdict))
     return step
 
 
@@ -172,9 +192,16 @@ async def decompose_steps(normalized_source: str) -> list[Step]:
     return [_build_step(raw, normalized_source) for raw in raw_steps]
 
 
-async def run_verification(steps: list[Step]) -> AsyncGenerator[Step, None]:
+async def run_verification(steps: list[Step]) -> AsyncGenerator[Step | StepAttempt, None]:
     """Stages 3-5 (§6.3-6.5) over an already-decomposed step list. Mutates
-    and yields the same Step objects passed in.
+    and yields the same Step objects passed in, interleaved with StepAttempt
+    progress events as each individual attempt finishes (see AttemptEmitter)
+    — a single shared queue is the simplest way to fan the concurrent
+    per-step tasks' progress back into one ordered stream: each worker pushes
+    every StepAttempt it produces plus, last, its own final Step; the
+    generator just drains the queue until it has seen one final Step per
+    formalizable step, so arrival order across steps is whatever order the
+    events actually happened in, not step order.
     """
     skipped = [s for s in steps if s.classification in _SKIP_FORMALIZATION]
     formalizable = [s for s in steps if s.classification not in _SKIP_FORMALIZATION]
@@ -182,12 +209,67 @@ async def run_verification(steps: list[Step]) -> AsyncGenerator[Step, None]:
     for step in skipped:
         yield step
 
-    tasks = [asyncio.create_task(_formalize_and_verify(s)) for s in formalizable]
-    for coro in asyncio.as_completed(tasks):
-        yield await coro
+    if not formalizable:
+        return
+
+    queue: asyncio.Queue[Step | StepAttempt] = asyncio.Queue()
+
+    async def worker(step: Step) -> None:
+        async def emit(a: StepAttempt) -> None:
+            await queue.put(a)
+
+        result = await _formalize_and_verify(step, emit)
+        await queue.put(result)
+
+    tasks = [asyncio.create_task(worker(s)) for s in formalizable]
+    remaining = len(formalizable)
+    while remaining > 0:
+        item = await queue.get()
+        yield item
+        if isinstance(item, Step):
+            remaining -= 1
+    await asyncio.gather(*tasks)
 
 
-async def run_real_pipeline(normalized_source: str) -> AsyncGenerator[Step, None]:
+async def run_real_pipeline(normalized_source: str) -> AsyncGenerator[Step | StepAttempt, None]:
     steps = await decompose_steps(normalized_source)
-    async for step in run_verification(steps):
+    async for item in run_verification(steps):
+        yield item
+
+
+async def retry_step(step: Step) -> AsyncGenerator[Step | StepAttempt, None]:
+    """Re-run formalize+verify for a single already-decomposed step (a
+    user-triggered retry from the UI, not part of the original streamed
+    run). Resets formalization/verdict/evidence back to the pre-verification
+    shape `_build_step` produces, then reuses `_formalize_and_verify` as-is —
+    same MAX_LEAN_ATTEMPTS repair loop and `_lean_semaphore` concurrency cap
+    as a normal run, just scoped to one step. Yields StepAttempt progress
+    events live (same as run_verification) followed by exactly one final
+    Step. PREMISE/UNFORMALIZABLE steps were never formalized in the first
+    place, so retrying is a no-op — just yield the step back unchanged.
+    """
+    if step.classification in _SKIP_FORMALIZATION:
         yield step
+        return
+
+    step.formalization = None
+    step.verdict = Verdict.UNVERIFIED
+    step.verifier = None
+    step.evidence = None
+
+    queue: asyncio.Queue[Step | StepAttempt] = asyncio.Queue()
+
+    async def emit(a: StepAttempt) -> None:
+        await queue.put(a)
+
+    async def worker() -> None:
+        result = await _formalize_and_verify(step, emit)
+        await queue.put(result)
+
+    task = asyncio.create_task(worker())
+    while True:
+        item = await queue.get()
+        yield item
+        if isinstance(item, Step):
+            break
+    await task

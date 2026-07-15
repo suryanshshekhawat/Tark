@@ -1,5 +1,5 @@
 import { CLASSIFICATION_LABEL, STATUS_ICON } from "./components/StatementCard";
-import type { Report, Step } from "./types";
+import type { OverallStatus, Report, Step } from "./types";
 
 const STATUS_LABEL: Record<Report["overall_status"], string> = {
   FULLY_VERIFIED: "FULLY VERIFIED",
@@ -27,6 +27,32 @@ function stepSection(step: Step): string {
     for (const note of step.claude_notes) lines.push(`- ${note.text}`);
   }
   return lines.join("\n");
+}
+
+/** Mirrors backend/app/pipeline/report.py::build_report's tallying exactly
+ * (ASSUMED steps are premises, not obligations; a genuine REFUTED anywhere
+ * wins over everything else) — used to refresh the header's overall_status
+ * and counts client-side after a step is re-verified via a retry, without
+ * re-running the whole-proof advisory pass (claude_global_notes are left as
+ * they were; a single step's retry doesn't invalidate whole-proof notes). */
+export function recomputeReportTally(
+  steps: Step[],
+): Pick<Report, "overall_status" | "steps_verified" | "steps_total" | "steps_assumed"> {
+  const verified = steps.filter((s) => s.verdict === "VERIFIED").length;
+  const assumed = steps.filter((s) => s.verdict === "ASSUMED").length;
+  const refuted = steps.some((s) => s.verdict === "REFUTED");
+  const checkable = steps.filter((s) => s.verdict !== "ASSUMED");
+
+  let overall_status: OverallStatus;
+  if (refuted) {
+    overall_status = "REFUTED_SOMEWHERE";
+  } else if (checkable.length > 0 && verified === checkable.length) {
+    overall_status = "FULLY_VERIFIED";
+  } else {
+    overall_status = "PARTIALLY_VERIFIED";
+  }
+
+  return { overall_status, steps_verified: verified, steps_total: steps.length, steps_assumed: assumed };
 }
 
 /** Builds a self-contained Markdown report: the original proof as pasted,

@@ -21,9 +21,17 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..claude_client import ClaudeNotConfiguredError
-from ..models.schema import Classification, DecompositionSummary, Step, VerifyRequest
+from ..models.schema import (
+    Classification,
+    DecompositionSummary,
+    Evidence,
+    Step,
+    StepAttempt,
+    Verdict,
+    VerifyRequest,
+)
 from ..pipeline.advisory import run_advisory_pass
-from ..pipeline.real_pipeline import decompose_steps, run_verification
+from ..pipeline.real_pipeline import decompose_steps, retry_step, run_verification
 from ..pipeline.report import build_report
 from ..validation.latex_validator import LatexValidator
 
@@ -77,8 +85,11 @@ async def verify(request: VerifyRequest):
         )
 
         try:
-            async for step in run_verification(steps):
-                yield _sse("step", step.model_dump())
+            async for item in run_verification(steps):
+                if isinstance(item, StepAttempt):
+                    yield _sse("step_attempt", item.model_dump())
+                else:
+                    yield _sse("step", item.model_dump())
         except Exception as exc:  # noqa: BLE001 - never let the stream die silently
             _logger.exception("Pipeline failed during verification")
             yield _sse("pipeline_error", {"message": f"Pipeline failed: {exc}"})
@@ -89,5 +100,31 @@ async def verify(request: VerifyRequest):
         global_notes = await run_advisory_pass(result.normalized_source, steps)
         report = build_report(result.normalized_source, steps, claude_global_notes=global_notes)
         yield _sse("done", report.model_dump())
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/verify/retry")
+async def retry(step: Step):
+    """Re-run formalize+verify for a single step (a UI "retry" click on a
+    failed statement), not the whole proof. Takes the step as currently held
+    by the frontend and streams the same `step_attempt`/`step` events as
+    `/verify` (just for this one step) so the UI can show attempt progress
+    live instead of only learning the outcome once the whole repair loop
+    finishes.
+    """
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        try:
+            async for item in retry_step(step):
+                if isinstance(item, StepAttempt):
+                    yield _sse("step_attempt", item.model_dump())
+                else:
+                    yield _sse("step", item.model_dump())
+        except Exception as exc:  # noqa: BLE001 - degrade, don't kill the stream
+            _logger.exception("Retry failed for step %s", step.id)
+            step.evidence = Evidence(raw_output=f"Retry crashed: {exc}", exit_code=None)
+            step.verdict = Verdict.UNVERIFIED
+            yield _sse("step", step.model_dump())
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

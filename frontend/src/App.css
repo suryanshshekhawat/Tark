@@ -432,11 +432,32 @@
   mix-blend-mode: normal;
 }
 
+/* Hover/focus state: deepen the same verdict color instead of drawing an
+   unrelated dark outline — keeps the highlight legible as "this one" without
+   implying a different verdict via a stray ink-colored stroke. */
 .pdf-highlight-box.active {
-  outline: 2px solid var(--ink);
-  outline-offset: 1px;
+  mix-blend-mode: multiply;
+}
+
+.pdf-highlight-box.verdict-verified.active {
+  background: color-mix(in srgb, var(--verified) 45%, var(--verified-bg));
+}
+.pdf-highlight-box.verdict-refuted.active {
+  background: color-mix(in srgb, var(--refuted) 45%, var(--refuted-bg));
+}
+.pdf-highlight-box.verdict-unverified.active {
+  background: color-mix(in srgb, var(--unverified) 45%, var(--unverified-bg));
+}
+.pdf-highlight-box.verdict-assumed.active {
+  background: color-mix(in srgb, var(--assumed) 45%, var(--assumed-bg));
+}
+.pdf-highlight-box.pending.active {
   mix-blend-mode: normal;
-  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  background: color-mix(in srgb, var(--muted) 35%, var(--code-bg));
+}
+.pdf-highlight-box.unformalizable.active {
+  border-bottom-width: 3px;
+  border-bottom-color: var(--unverified);
 }
 
 .paper-page-badge {
@@ -653,6 +674,66 @@
   color: var(--refuted);
 }
 
+/* ---------- attempt dots (5 blocks — grey=unused, red=failed, green=verified) ---------- */
+
+.attempt-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.attempt-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.attempt-dot-grey {
+  background: var(--border);
+}
+.attempt-dot-red {
+  background: var(--refuted);
+}
+.attempt-dot-green {
+  background: var(--verified);
+}
+
+/* ---------- retry button (failed lean_candidate / computational steps) ---------- */
+
+.statement-retry-btn {
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--ink);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.statement-retry-btn:hover {
+  background: var(--ink);
+  color: #fff;
+}
+
+/* if statement-deps is also present it already claims margin-left: auto —
+   let the retry button sit right after it instead of fighting for the gap */
+.statement-deps + .statement-retry-btn {
+  margin-left: 0;
+}
+
+/* ---------- per-statement process trail (pending lean_candidate/computational) ---------- */
+
+.statement-process-trail {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .statement-deps {
   margin-left: auto;
   font-size: 11px;
@@ -672,6 +753,7 @@
 }
 
 .statement-evidence-pane {
+  position: relative;
   background: var(--code-bg);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
@@ -693,6 +775,32 @@
   font-size: 11px;
   font-family: var(--mono);
   color: var(--text-h);
+}
+
+.statement-evidence-pane pre.evidence-collapsed {
+  max-height: 40px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 22px, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 22px, transparent 100%);
+}
+
+.evidence-toggle {
+  display: block;
+  margin-top: 4px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.evidence-toggle:hover {
+  text-decoration: underline;
 }
 
 .claude-notes {
@@ -788,6 +896,15 @@
   padding-top: 1px;
 }
 
+.decomposition-process-trail {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .decomposition-breakdown {
   font-size: 12px;
   color: var(--muted);
@@ -800,13 +917,6 @@
   font-weight: 600;
   color: var(--text-h);
   margin-top: 6px;
-}
-
-.verification-complete {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--verified);
-  margin-bottom: 4px;
 }
 
 .timeline-content .statement-card {

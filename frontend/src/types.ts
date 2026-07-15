@@ -38,6 +38,17 @@ export interface ClaudeNote {
   text: string;
 }
 
+// A single formalize/verify attempt's outcome, streamed the moment that one
+// attempt finishes — before the backend's repair loop decides whether to
+// retry. Lets the UI color an attempt-history indicator live as each attempt
+// happens, instead of only learning the whole history at once when the
+// step's final `Step` arrives — see real_pipeline.py's AttemptEmitter.
+export interface StepAttempt {
+  step_id: string;
+  attempt: number;
+  verdict: Verdict;
+}
+
 export interface Step {
   id: string;
   statement: string;

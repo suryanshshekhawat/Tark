@@ -23,11 +23,16 @@ export function TopBar({
       </header>
 
       <div className="topbar-sub">
-        <div className="how-to-use">
+        <div
+          className="how-to-use"
+          onMouseEnter={() => setHowToUseOpen(true)}
+          onMouseLeave={() => setHowToUseOpen(false)}
+        >
           <button
             type="button"
             className="how-to-use-link"
-            onClick={() => setHowToUseOpen((v) => !v)}
+            onFocus={() => setHowToUseOpen(true)}
+            onBlur={() => setHowToUseOpen(false)}
             aria-expanded={howToUseOpen}
           >
             How to use ?

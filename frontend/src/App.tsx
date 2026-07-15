@@ -1,12 +1,22 @@
 import { useMemo, useState } from "react";
 import "./App.css";
-import { compiledPdfUrl, compileLatex, streamVerify } from "./api";
+import { compiledPdfUrl, compileLatex, streamRetryStep, streamVerify } from "./api";
 import { PdfPaperViewer } from "./components/PdfPaperViewer";
 import { ResultSummary } from "./components/ResultSummary";
 import { StatementList } from "./components/StatementList";
 import { TopBar } from "./components/TopBar";
 import { TypingWordmark } from "./components/TypingWordmark";
-import type { AutoRepair, CompileError, DecompositionSummary, IngestError, Report, Step } from "./types";
+import { recomputeReportTally } from "./report";
+import type {
+  AutoRepair,
+  CompileError,
+  DecompositionSummary,
+  IngestError,
+  Report,
+  Step,
+  StepAttempt,
+  Verdict,
+} from "./types";
 
 const MAX_LATEX_LENGTH = 10000;
 
@@ -64,8 +74,24 @@ function App() {
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [focusedStepId, setFocusedStepId] = useState<string | null>(null);
   const [focusOrigin, setFocusOrigin] = useState<FocusOrigin>(null);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  // Per-step live attempt history — verdict of each attempt so far, in
+  // order, filled in as `step_attempt` events arrive (both during the
+  // initial run and during a retry). Distinct from `formalization.attempts`
+  // on Step, which is just a final count with no per-attempt outcomes.
+  const [attemptHistory, setAttemptHistory] = useState<Map<string, Verdict[]>>(new Map());
 
   const sortedSteps = useMemo(() => sortSteps(steps), [steps]);
+
+  function recordAttempt(a: StepAttempt) {
+    setAttemptHistory((prev) => {
+      const next = new Map(prev);
+      const arr = [...(next.get(a.step_id) ?? [])];
+      arr[a.attempt - 1] = a.verdict;
+      next.set(a.step_id, arr);
+      return next;
+    });
+  }
 
   function focusFromSource(id: string) {
     setFocusedStepId(id);
@@ -115,6 +141,7 @@ function App() {
     setIngestError(null);
     setPipelineError(null);
     setFocusedStepId(null);
+    setAttemptHistory(new Map());
 
     try {
       await streamVerify(latex, {
@@ -123,6 +150,7 @@ function App() {
           setDecomposition(summary);
           setSteps(summary.steps);
         },
+        onAttempt: recordAttempt,
         onStep: (step) => {
           setSteps((prev) => {
             const idx = prev.findIndex((s) => s.id === step.id);
@@ -154,6 +182,57 @@ function App() {
         });
       }
       setStatus("error");
+    }
+  }
+
+  async function handleRetry(id: string) {
+    const step = steps.find((s) => s.id === id);
+    if (!step || retryingIds.has(id)) return;
+    setRetryingIds((prev) => new Set(prev).add(id));
+    // Clear this step's attempt-history dots back to empty (not deleted —
+    // an empty array still means "no attempts yet" so dots render all-grey)
+    // so a retry's attempts are colored in fresh, not appended after the
+    // original run's history.
+    setAttemptHistory((prev) => {
+      const next = new Map(prev);
+      next.set(id, []);
+      return next;
+    });
+
+    let finalStep: Step | null = null;
+    try {
+      await streamRetryStep(step, {
+        onAttempt: recordAttempt,
+        onStep: (updated) => {
+          finalStep = updated;
+        },
+      });
+      if (finalStep) {
+        const updated: Step = finalStep;
+        const nextSteps = steps.map((s) => (s.id === id ? updated : s));
+        setSteps(nextSteps);
+        // If the report header is already showing (verification finished),
+        // a retry that changes a verdict must be reflected there too — both
+        // the per-step list inside `report` and the overall_status/counts
+        // the header actually reads from.
+        setReport((prev) =>
+          prev
+            ? {
+                ...prev,
+                steps: prev.steps.map((s) => (s.id === id ? updated : s)),
+                ...recomputeReportTally(nextSteps),
+              }
+            : prev,
+        );
+      }
+    } catch (err) {
+      console.error("Retry failed:", err);
+    } finally {
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   }
 
@@ -295,6 +374,9 @@ function App() {
                   focusedStepId={focusedStepId}
                   focusOrigin={focusOrigin}
                   onFocus={focusFromList}
+                  onRetry={handleRetry}
+                  retryingIds={retryingIds}
+                  attemptHistory={attemptHistory}
                 />
               )}
 

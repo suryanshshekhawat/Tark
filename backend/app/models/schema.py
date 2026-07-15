@@ -78,6 +78,18 @@ class ClaudeNote(BaseModel):
     text: str
 
 
+class StepAttempt(BaseModel):
+    """A single formalize/verify attempt's outcome, streamed the moment that
+    one attempt finishes — before the repair loop decides whether to retry.
+    Lets the frontend color an attempt-history indicator live as each
+    attempt happens, instead of only learning the whole history at once when
+    the step's final `Step` event arrives. See real_pipeline.py."""
+
+    step_id: str
+    attempt: int
+    verdict: Verdict
+
+
 class Step(BaseModel):
     id: str
     statement: str
