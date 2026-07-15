@@ -30,6 +30,69 @@ interface PageIndex {
   itemBoundaries: number[];
 }
 
+// Commands whose rendered output has no textual resemblance to their own
+// command name (pure symbols, spacing, or structural directives) — dropped
+// entirely before matching. Left alone, "\equiv" would just lose its
+// backslash and survive as the literal word "equiv" in the search text,
+// but the PDF renders "≡", not the word "equiv" — so any step whose source
+// includes commands like this would search for words that can never appear
+// in the rendered page text, and fail to match (this is exactly what
+// dropped highlighting for every display-math line: \equiv, \pmod, \cdot,
+// \cdots, \Rightarrow, \quad, \text, \noindent, \medskip, \textbf all
+// appear in that proof). Commands NOT in this set (e.g. \gcd, \sin, \log)
+// render as their own name, so the default "just strip the backslash"
+// behavior below is already correct for those — only this explicit set
+// needs different treatment.
+const SYMBOL_OR_STRUCTURAL_COMMANDS = new Set([
+  // spacing / structure — no visible text of their own
+  "quad", "qquad", "left", "right", "noindent", "indent",
+  "medskip", "bigskip", "smallskip", "vspace", "hspace",
+  "displaystyle", "textstyle", "scriptstyle", "nonumber", "notag", "label", "tag",
+  // text-formatting wrappers — their braced argument is the real content,
+  // dropping the command name and letting the braces get stripped by
+  // normalizeWithIndex leaves just the literal text behind.
+  "text", "textbf", "textit", "textrm", "texttt", "emph", "mathrm", "mathbf", "mathit", "mathcal",
+  // punctuation / ellipses / operators rendered as glyphs, not words
+  "cdot", "cdots", "ldots", "dots", "vdots", "ddots",
+  // relations
+  "leq", "le", "geq", "ge", "neq", "ne", "equiv", "approx", "sim", "simeq", "cong", "propto",
+  "subset", "subseteq", "supset", "supseteq", "in", "notin", "ni",
+  // arrows / logic
+  "Rightarrow", "Leftarrow", "Leftrightarrow", "rightarrow", "leftarrow", "leftrightarrow",
+  "implies", "impliedby", "iff", "to", "mapsto", "longmapsto", "longrightarrow", "longleftarrow",
+  "forall", "exists", "nexists",
+  // set operators / misc symbols
+  "cup", "cap", "setminus", "emptyset", "varnothing", "infty", "partial", "nabla",
+  "pm", "mp", "times", "div", "ast", "star", "circ", "bullet", "wedge", "vee", "oplus", "otimes",
+  // greek letters
+  "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta", "vartheta",
+  "iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "varsigma", "tau", "upsilon",
+  "phi", "varphi", "chi", "psi", "omega",
+  "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+]);
+
+// Commands whose rendered text differs from their literal command name —
+// substituted before the general symbol-dropping pass above runs.
+const TEXT_SUBSTITUTIONS: [RegExp, string][] = [
+  [/\\pmod\b/g, " mod "],
+  [/\\bmod\b/g, " mod "],
+];
+
+/** Approximates what a LaTeX source snippet renders as, well enough for
+ * matching against a PDF's extracted text — not a full LaTeX-to-text
+ * converter, just enough for the symbol/command shapes that actually show
+ * up in number-theory proofs (see CONSTRUCTION_PLAN.md's scope). */
+function preprocessLatexForMatching(latex: string): string {
+  let s = latex;
+  for (const [re, replacement] of TEXT_SUBSTITUTIONS) {
+    s = s.replace(re, replacement);
+  }
+  s = s.replace(/\\([a-zA-Z]+)/g, (_match, name: string) =>
+    SYMBOL_OR_STRUCTURAL_COMMANDS.has(name) ? " " : name,
+  );
+  return s;
+}
+
 function normalizeWithIndex(raw: string): { norm: string; rawIndexOfNormChar: number[] } {
   let norm = "";
   const rawIndexOfNormChar: number[] = [];
@@ -190,7 +253,7 @@ export async function computeStepBoxes(
   for (const step of steps) {
     const { start, end } = step.source_span;
     if (end <= start) continue;
-    const needleRaw = normalizedSource.slice(start, end);
+    const needleRaw = preprocessLatexForMatching(normalizedSource.slice(start, end));
     const { norm: needle } = normalizeWithIndex(needleRaw);
     if (!needle) continue;
 
