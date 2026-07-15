@@ -57,6 +57,19 @@ class SourceSpan(BaseModel):
     anchor_text: Optional[str] = None
 
 
+class PdfBox(BaseModel):
+    """A single highlight rectangle on a compiled PDF page, in PDF point
+    space (origin bottom-left, y-up — see rendering/synctex_lookup.py for the
+    conversion). A step can span multiple boxes (its text may wrap across
+    lines or line breaks within the typeset paragraph)."""
+
+    page: int
+    x: float
+    y: float
+    w: float
+    h: float
+
+
 class Formalization(BaseModel):
     lean_code: Optional[str] = None
     attempts: int = 0
@@ -89,6 +102,32 @@ class Step(BaseModel):
     verifier: Optional[VerifierName] = None
     evidence: Optional[Evidence] = None
     claude_notes: list[ClaudeNote] = Field(default_factory=list)
+    # Populated by routers/verify.py from the compiled PDF's SyncTeX map, not
+    # by the pipeline itself — a rendering detail, never a verifier signal.
+    # None (not just empty) when compilation didn't happen or the step's
+    # span couldn't be located, so the frontend can tell "no boxes" apart
+    # from "we didn't even try".
+    pdf_boxes: Optional[list[PdfBox]] = None
+
+
+class DecompositionSummary(BaseModel):
+    """Emitted once, immediately after Stage 2 (decomposition) completes and
+    before any formalize/verify work starts — the true total and per-
+    classification breakdown are already known at this point, not something
+    the frontend should have to infer from how many `step` events have
+    arrived so far. `steps` carries every decomposed step's id/statement/
+    classification/depends_on/source_span/pdf_boxes immediately; formalizable
+    (lean_candidate/computational) ones still carry a placeholder verdict
+    here (not yet checked) and are superseded by their own later `step`
+    event once verification actually finishes for that id — the frontend
+    tells "placeholder" from "final" apart by whether a matching `step`
+    event has arrived, not by inspecting this verdict."""
+
+    total: int
+    assumptions: int
+    verifiable: int
+    computational: int
+    steps: list[Step]
 
 
 class Report(BaseModel):
@@ -121,3 +160,21 @@ class IngestError(BaseModel):
 
 class VerifyRequest(BaseModel):
     latex: str
+
+
+class CompileRequest(BaseModel):
+    latex: str
+
+
+class CompileResult(BaseModel):
+    doc_id: str
+    page_count: int
+
+
+class CompileError(BaseModel):
+    """A real pdflatex failure — distinct from IngestError, which is our own
+    structural pre-check (balanced braces/environments, math content) and
+    never invokes a compiler at all."""
+
+    message: str
+    log: str = ""

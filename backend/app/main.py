@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .routers import compile as compile_router
 from .routers import verify
 
 app = FastAPI(
@@ -18,6 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(verify.router, prefix="/api")
+app.include_router(compile_router.router, prefix="/api")
 
 
 @app.get("/health")

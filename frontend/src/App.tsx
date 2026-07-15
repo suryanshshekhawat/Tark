@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import "./App.css";
-import { streamVerify } from "./api";
-import { LatexPreview } from "./components/LatexPreview";
-import { SourcePane } from "./components/SourcePane";
-import { StepCard } from "./components/StepCard";
-import { StepSidebar } from "./components/StepSidebar";
-import { SummaryHeader } from "./components/SummaryHeader";
-import type { AutoRepair, IngestError, Report, Step } from "./types";
+import { compiledPdfUrl, compileLatex, streamVerify } from "./api";
+import { PdfPaperViewer } from "./components/PdfPaperViewer";
+import { ResultSummary } from "./components/ResultSummary";
+import { StatementList } from "./components/StatementList";
+import { TopBar } from "./components/TopBar";
+import { TypingWordmark } from "./components/TypingWordmark";
+import type { AutoRepair, CompileError, DecompositionSummary, IngestError, Report, Step } from "./types";
+
+const MAX_LATEX_LENGTH = 10000;
 
 const EXAMPLES: { label: string; latex: string }[] = [
   {
@@ -27,9 +29,8 @@ But this contradicts $\gcd(p, q) = 1$. Hence $\sqrt{2}$ is irrational.`,
   },
 ];
 
-type Stage = "input" | "preview" | "result";
+type Stage = "landing" | "preview" | "result";
 type Status = "idle" | "streaming" | "error" | "done";
-type ViewMode = "list" | "source";
 type FocusOrigin = "source" | "sidebar" | null;
 
 function stepSortKey(id: string): [string, number] {
@@ -48,10 +49,15 @@ function sortSteps(steps: Step[]): Step[] {
 
 function App() {
   const [latex, setLatex] = useState("");
-  const [stage, setStage] = useState<Stage>("input");
+  const [stage, setStage] = useState<Stage>("landing");
   const [status, setStatus] = useState<Status>("idle");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [compiling, setCompiling] = useState(false);
+  const [compileError, setCompileError] = useState<CompileError | null>(null);
+  const [pdfDocId, setPdfDocId] = useState<string | null>(null);
+  const [decomposition, setDecomposition] = useState<DecompositionSummary | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
+  const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set());
   const [autoRepairs, setAutoRepairs] = useState<AutoRepair[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [ingestError, setIngestError] = useState<IngestError | null>(null);
@@ -66,26 +72,67 @@ function App() {
     setFocusOrigin("source");
   }
 
-  function focusFromSidebar(id: string) {
+  function focusFromList(id: string) {
     setFocusedStepId(id);
     setFocusOrigin("sidebar");
   }
 
+  async function handlePreview() {
+    if (!latex.trim() || latex.length > MAX_LATEX_LENGTH) {
+      setInputError("Please ensure your Latex file is complete and compiles ....");
+      return;
+    }
+    setInputError(null);
+    setCompileError(null);
+    setCompiling(true);
+    try {
+      const result = await compileLatex(latex);
+      setPdfDocId(result.doc_id);
+      setStage("preview");
+    } catch (err) {
+      if (err && typeof err === "object" && "message" in err) {
+        setCompileError(err as CompileError);
+      } else {
+        setCompileError({
+          message: err instanceof Error ? err.message : "Failed to compile LaTeX.",
+          log: "",
+        });
+      }
+    } finally {
+      setCompiling(false);
+    }
+  }
+
   async function handleVerify() {
+    if (status === "streaming") return; // guard against duplicate/concurrent submissions
     setStage("result");
     setStatus("streaming");
+    setDecomposition(null);
     setSteps([]);
+    setResolvedIds(new Set());
     setAutoRepairs([]);
     setReport(null);
     setIngestError(null);
     setPipelineError(null);
-    setViewMode("list");
     setFocusedStepId(null);
 
     try {
       await streamVerify(latex, {
         onAutoRepair: (repair) => setAutoRepairs((prev) => [...prev, repair]),
-        onStep: (step) => setSteps((prev) => [...prev, step]),
+        onDecomposition: (summary) => {
+          setDecomposition(summary);
+          setSteps(summary.steps);
+        },
+        onStep: (step) => {
+          setSteps((prev) => {
+            const idx = prev.findIndex((s) => s.id === step.id);
+            if (idx === -1) return [...prev, step];
+            const next = [...prev];
+            next[idx] = step;
+            return next;
+          });
+          setResolvedIds((prev) => new Set(prev).add(step.id));
+        },
         onDone: (rep) => {
           setReport(rep);
           setStatus("done");
@@ -110,134 +157,153 @@ function App() {
     }
   }
 
+  function handleBackToLanding() {
+    setStage("landing");
+  }
+
+  function handleBackToPreview() {
+    setStage("preview");
+  }
+
   return (
     <div className="app">
-      <header className="app-header">
-        <h1>Tark</h1>
-      </header>
-
-      {stage === "input" && (
-        <section className="input-screen">
-          <textarea
-            placeholder="Paste a LaTeX proof"
-            value={latex}
-            onChange={(e) => setLatex(e.target.value)}
-            rows={10}
-          />
-          <div className="input-actions">
-            <button onClick={() => setStage("preview")} disabled={!latex.trim()}>
-              Preview
-            </button>
-            {EXAMPLES.map((ex) => (
-              <button key={ex.label} className="secondary" onClick={() => setLatex(ex.latex)}>
-                {ex.label}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {stage === "preview" && (
-        <LatexPreview
-          latex={latex}
-          onEdit={() => setStage("input")}
-          onConfirm={handleVerify}
-        />
-      )}
-
-      {stage === "result" && (
+      {stage === "landing" && (
         <>
-          {ingestError && (
-            <section className="ingest-error">
-              <div className="ingest-error-type">{ingestError.error_type}</div>
-              <p>{ingestError.message}</p>
-              {ingestError.location && (
-                <p className="ingest-error-location">
-                  line {ingestError.location.line}, offset {ingestError.location.char_offset}
-                </p>
-              )}
-            </section>
-          )}
-
-          {pipelineError && (
-            <section className="ingest-error">
-              <p>{pipelineError}</p>
-            </section>
-          )}
-
-          {autoRepairs.length > 0 && (
-            <section className="auto-repairs">
-              {autoRepairs.map((r, i) => (
-                <div key={i} className="auto-repair">
-                  Auto-repaired: {r.issue} — {r.action}
-                </div>
-              ))}
-            </section>
-          )}
-
-          {report && (
-            <div className="result-header">
-              <SummaryHeader report={report} />
-              <div className="view-toggle">
-                <button
-                  className={viewMode === "list" ? "active" : ""}
-                  onClick={() => setViewMode("list")}
-                >
-                  List
-                </button>
-                <button
-                  className={viewMode === "source" ? "active" : ""}
-                  onClick={() => setViewMode("source")}
-                >
-                  Source
+          <TopBar showWordmark={false} />
+          <section className="landing-screen">
+            <div className="landing-inner">
+              <TypingWordmark />
+              <div className={`latex-input-row${inputError ? " has-error" : ""}`}>
+                <textarea
+                  className="latex-input"
+                  placeholder="Paste Compilable Latex"
+                  value={latex}
+                  rows={1}
+                  onChange={(e) => {
+                    setLatex(e.target.value);
+                    if (inputError) setInputError(null);
+                  }}
+                />
+                <span className={`latex-input-count${inputError ? " has-error" : ""}`}>
+                  {latex.length} / {MAX_LATEX_LENGTH}
+                </span>
+                <button className="preview-btn" onClick={handlePreview} disabled={compiling}>
+                  {compiling ? "Compiling…" : "Preview"}
                 </button>
               </div>
-            </div>
-          )}
-
-          {status === "streaming" && !report && <p className="status-line">Verifying…</p>}
-
-          {viewMode === "list" && sortedSteps.length > 0 && (
-            <section className="report-view">
-              {sortedSteps.map((step) => (
-                <StepCard key={step.id} step={step} />
-              ))}
-            </section>
-          )}
-
-          {viewMode === "source" && report && (
-            <section className="split-view">
-              <SourcePane
-                normalizedSource={report.normalized_source}
-                steps={report.steps}
-                focusedStepId={focusedStepId}
-                focusOrigin={focusOrigin}
-                onFocus={focusFromSource}
-              />
-              <StepSidebar
-                steps={sortSteps(report.steps)}
-                focusedStepId={focusedStepId}
-                focusOrigin={focusOrigin}
-                onFocus={focusFromSidebar}
-              />
-            </section>
-          )}
-
-          {report && report.claude_global_notes.length > 0 && (
-            <section className="claude-global-notes" title="Unverified opinion — not a verifier result">
-              {report.claude_global_notes.map((note, i) => (
-                <div key={i} className="claude-note">
-                  {note}
+              {inputError && <p className="latex-input-error">{inputError}</p>}
+              {compileError && (
+                <div className="ingest-error compile-error">
+                  <div className="ingest-error-type">LaTeX failed to compile</div>
+                  <p>{compileError.message}</p>
+                  {compileError.log && <pre className="compile-error-log">{compileError.log}</pre>}
                 </div>
-              ))}
-            </section>
-          )}
+              )}
 
-          {(status === "done" || status === "error") && (
-            <button className="secondary restart-button" onClick={() => setStage("input")}>
-              New proof
-            </button>
-          )}
+              <p className="landing-subtitle">
+                Transparent Formal Verification and Computational Support for Mathematical Proofs
+              </p>
+
+              <div className="landing-examples">
+                {EXAMPLES.map((ex) => (
+                  <button
+                    key={ex.label}
+                    className="example-chip"
+                    onClick={() => {
+                      setLatex(ex.latex);
+                      setInputError(null);
+                    }}
+                  >
+                    {ex.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        </>
+      )}
+
+      {stage === "preview" && pdfDocId && (
+        <>
+          <TopBar onBack={handleBackToLanding} />
+          <section className="split-screen">
+            <PdfPaperViewer pdfUrl={compiledPdfUrl(pdfDocId)} />
+            <div className="side-panel">
+              <p className="side-copy">
+                If the compiled version of Latex looks good, you can go ahead and verify, this is
+                because we accept alternate inputs as well and intend to be sure that the content
+                being fed to the system is accurate.
+              </p>
+              <button className="verify-btn" onClick={handleVerify}>
+                Looks allright - Verify
+              </button>
+            </div>
+          </section>
+        </>
+      )}
+
+      {stage === "result" && pdfDocId && (
+        <>
+          <TopBar onBack={handleBackToPreview} />
+          <section className="split-screen">
+            <PdfPaperViewer
+              pdfUrl={compiledPdfUrl(pdfDocId)}
+              steps={sortedSteps}
+              resolvedIds={status === "streaming" ? resolvedIds : undefined}
+              focusedStepId={focusedStepId}
+              focusOrigin={focusOrigin}
+              onFocus={focusFromSource}
+            />
+            <div className="side-panel">
+              {ingestError && (
+                <div className="ingest-error">
+                  <div className="ingest-error-type">{ingestError.error_type}</div>
+                  <p>{ingestError.message}</p>
+                  {ingestError.location && (
+                    <p className="ingest-error-location">
+                      line {ingestError.location.line}, offset {ingestError.location.char_offset}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {pipelineError && (
+                <div className="ingest-error">
+                  <p>{pipelineError}</p>
+                </div>
+              )}
+
+              {autoRepairs.length > 0 && (
+                <div className="auto-repairs">
+                  {autoRepairs.map((r, i) => (
+                    <div key={i} className="auto-repair">
+                      Auto-repaired: {r.issue} — {r.action}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {status === "done" && report && <ResultSummary report={report} latex={latex} />}
+
+              {(status === "streaming" || status === "done") && !ingestError && !pipelineError && (
+                <StatementList
+                  steps={sortedSteps}
+                  decomposition={decomposition}
+                  resolvedIds={resolvedIds}
+                  mode={status === "done" ? "final" : "live"}
+                  focusedStepId={focusedStepId}
+                  focusOrigin={focusOrigin}
+                  onFocus={focusFromList}
+                />
+              )}
+
+              {(status === "done" || status === "error") && (
+                <button className="new-proof-btn" onClick={handleBackToLanding}>
+                  New proof
+                </button>
+              )}
+            </div>
+          </section>
         </>
       )}
     </div>

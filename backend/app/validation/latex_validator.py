@@ -30,13 +30,28 @@ def _line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def _strip_preamble(text: str) -> str:
-    """Strip everything outside \\begin{document}...\\end{document}, if present."""
+def strip_preamble_with_offset(text: str) -> tuple[str, int]:
+    """Like _strip_preamble, but also returns the char offset into `text`
+    where the returned (stripped) body begins — i.e. text[offset:offset+len(body)] == body.
+    Shared with rendering/latex_compiler.py so the PDF-compile step and the
+    decomposition pipeline agree on exactly where "the body" starts; drift
+    between the two would misalign every SyncTeX box lookup by however much
+    they disagreed on stripped leading whitespace.
+    """
     begin_match = re.search(r"\\begin\{document\}", text)
     end_match = re.search(r"\\end\{document\}", text)
     if begin_match and end_match and end_match.start() > begin_match.end():
-        return text[begin_match.end():end_match.start()].strip()
-    return text.strip()
+        raw_body = text[begin_match.end():end_match.start()]
+        lstrip_len = len(raw_body) - len(raw_body.lstrip())
+        return raw_body.strip(), begin_match.end() + lstrip_len
+    lstrip_len = len(text) - len(text.lstrip())
+    return text.strip(), lstrip_len
+
+
+def _strip_preamble(text: str) -> str:
+    """Strip everything outside \\begin{document}...\\end{document}, if present."""
+    body, _ = strip_preamble_with_offset(text)
+    return body
 
 
 def _check_balanced_braces(text: str) -> tuple[bool, int | None]:

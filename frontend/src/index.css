@@ -8,7 +8,26 @@
   --accent-bg: rgba(124, 58, 237, 0.08);
   --accent-border: rgba(124, 58, 237, 0.4);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --ink: #000000;
+  --paper-bg: #ffffff;
+  --hairline: #1c1917;
+  --muted: #8a8680;
+
+  --verified: #15803d;
+  --verified-bg: #dcfce7;
+  --refuted: #b91c1c;
+  --refuted-bg: #fee2e2;
+  --unverified: #b45309;
+  --unverified-bg: #fef3c7;
+  --assumed: #475569;
+  --assumed-bg: #e2e8f0;
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  --sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   --serif: Georgia, 'Times New Roman', serif;
   --mono: ui-monospace, Consolas, monospace;
 
@@ -24,13 +43,12 @@
 
 #root {
   width: 100%;
-  max-width: 1080px;
+  max-width: 1120px;
   margin: 0 auto;
-  min-height: 100svh;
+  height: 100svh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 0 16px;
 }
 
 body {
@@ -47,4 +65,8 @@ h1 {
 
 p {
   margin: 0;
+}
+
+button {
+  font-family: inherit;
 }

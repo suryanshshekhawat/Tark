@@ -1,7 +1,38 @@
-import type { AutoRepair, IngestError, Report, Step } from "./types";
+import type {
+  AutoRepair,
+  CompileError,
+  CompileResult,
+  DecompositionSummary,
+  IngestError,
+  Report,
+  Step,
+} from "./types";
+
+/** POST /api/compile — real LaTeX -> PDF compilation. Throws the parsed
+ * CompileError on a 422 (a genuine pdflatex failure, distinct from the
+ * ingest-validation 422 /api/verify can return). */
+export async function compileLatex(latex: string): Promise<CompileResult> {
+  const res = await fetch("/api/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ latex }),
+  });
+  if (res.status === 422) {
+    throw (await res.json()) as CompileError;
+  }
+  if (!res.ok) {
+    throw new Error(`Unexpected response: ${res.status}`);
+  }
+  return (await res.json()) as CompileResult;
+}
+
+export function compiledPdfUrl(docId: string): string {
+  return `/api/compile/${docId}/pdf`;
+}
 
 export type VerifyStreamHandlers = {
   onAutoRepair?: (repair: AutoRepair) => void;
+  onDecomposition?: (summary: DecompositionSummary) => void;
   onStep?: (step: Step) => void;
   onDone?: (report: Report) => void;
   onPipelineError?: (message: string) => void;
@@ -65,6 +96,9 @@ function dispatchEvent(rawEvent: string, handlers: VerifyStreamHandlers): void {
   switch (eventName) {
     case "auto_repair":
       handlers.onAutoRepair?.(payload as AutoRepair);
+      break;
+    case "decomposition":
+      handlers.onDecomposition?.(payload as DecompositionSummary);
       break;
     case "step":
       handlers.onStep?.(payload as Step);

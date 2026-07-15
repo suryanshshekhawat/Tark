@@ -13,6 +13,9 @@ backend/.env
 tark_lean/.lake/
 tark_lean/.tark_scratch/
 
+# Compiled-PDF cache (backend/app/rendering/latex_compiler.py)
+backend/.tark_pdf_cache/
+
 # Node (frontend has its own .gitignore too)
 frontend/node_modules/
 frontend/dist/

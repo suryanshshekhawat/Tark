@@ -158,10 +158,27 @@ async def _formalize_and_verify(step: Step) -> Step:
     return step
 
 
-async def run_real_pipeline(normalized_source: str) -> AsyncGenerator[Step, None]:
+async def decompose_steps(normalized_source: str) -> list[Step]:
+    """Stage 2 alone (§6.2) — a single Claude call that already knows the
+    true total step count, every statement's text/classification/depends_on,
+    and (via find_span) its source_span, well before any formalize/verify
+    work starts. Split out from run_real_pipeline so routers/verify.py can
+    surface this immediately as a `decomposition` SSE event instead of
+    letting the frontend infer "how many statements total" from whichever
+    steps have merely *finished verifying* so far — a count that
+    misleadingly grows over the whole run instead of being known upfront.
+    """
     raw_steps = await decompose(normalized_source)
-    steps = [_build_step(raw, normalized_source) for raw in raw_steps]
+    return [_build_step(raw, normalized_source) for raw in raw_steps]
 
+
+async def run_verification(steps: list[Step]) -> AsyncGenerator[Step, None]:
+    """Stages 3-5 (§6.3-6.5) over an already-decomposed step list. Mutates
+    and yields the same Step objects passed in — a caller that already
+    attached data to a step (e.g. pdf_boxes, computed once right after
+    decomposition) will see that data preserved on the object it receives
+    back here, not overwritten.
+    """
     skipped = [s for s in steps if s.classification in _SKIP_FORMALIZATION]
     formalizable = [s for s in steps if s.classification not in _SKIP_FORMALIZATION]
 
@@ -171,3 +188,9 @@ async def run_real_pipeline(normalized_source: str) -> AsyncGenerator[Step, None
     tasks = [asyncio.create_task(_formalize_and_verify(s)) for s in formalizable]
     for coro in asyncio.as_completed(tasks):
         yield await coro
+
+
+async def run_real_pipeline(normalized_source: str) -> AsyncGenerator[Step, None]:
+    steps = await decompose_steps(normalized_source)
+    async for step in run_verification(steps):
+        yield step
