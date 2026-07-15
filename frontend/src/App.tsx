@@ -248,6 +248,7 @@ function App() {
           <section className="split-screen">
             <PdfPaperViewer
               pdfUrl={compiledPdfUrl(pdfDocId)}
+              normalizedSource={decomposition?.normalized_source}
               steps={sortedSteps}
               resolvedIds={status === "streaming" ? resolvedIds : undefined}
               focusedStepId={focusedStepId}

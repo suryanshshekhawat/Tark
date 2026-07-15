@@ -174,10 +174,7 @@ async def decompose_steps(normalized_source: str) -> list[Step]:
 
 async def run_verification(steps: list[Step]) -> AsyncGenerator[Step, None]:
     """Stages 3-5 (§6.3-6.5) over an already-decomposed step list. Mutates
-    and yields the same Step objects passed in — a caller that already
-    attached data to a step (e.g. pdf_boxes, computed once right after
-    decomposition) will see that data preserved on the object it receives
-    back here, not overwritten.
+    and yields the same Step objects passed in.
     """
     skipped = [s for s in steps if s.classification in _SKIP_FORMALIZATION]
     formalizable = [s for s in steps if s.classification not in _SKIP_FORMALIZATION]

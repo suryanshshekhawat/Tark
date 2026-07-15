@@ -316,6 +316,52 @@
   background: #f2f1ee;
 }
 
+/* ---------- pdf zoom toolbar ---------- */
+
+.pdf-toolbar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid var(--border);
+  padding: 2px;
+}
+
+.pdf-zoom-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-h);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pdf-zoom-btn:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+.pdf-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pdf-zoom-level {
+  min-width: 40px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
 .pdf-status {
   padding: 40px 20px;
   text-align: center;

@@ -22,16 +22,6 @@ export interface SourceSpan {
   anchor_text: string | null;
 }
 
-// A highlight rectangle on a compiled PDF page, in PDF point space (origin
-// top-left, y-down — see backend/app/rendering/synctex_lookup.py).
-export interface PdfBox {
-  page: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
 export interface Formalization {
   lean_code: string | null;
   attempts: number;
@@ -59,20 +49,22 @@ export interface Step {
   verifier: VerifierName | null;
   evidence: Evidence | null;
   claude_notes: ClaudeNote[];
-  pdf_boxes: PdfBox[] | null;
 }
 
 // Emitted once, right after decomposition (Claude call #1) finishes and
 // before any formalize/verify work starts — the true total/breakdown and
-// every step's id/statement/classification/source_span/pdf_boxes are
-// already known at this point. `steps` here are placeholders for anything
-// not yet checked (lean_candidate/computational); a later `step` event with
-// the same id supersedes it once verification actually finishes.
+// every step's id/statement/classification/source_span are already known
+// at this point. `steps` here are placeholders for anything not yet checked
+// (lean_candidate/computational); a later `step` event with the same id
+// supersedes it once verification actually finishes. `normalized_source`
+// lets the frontend start matching each step's source_span against the
+// compiled PDF's text layer immediately — see src/textLayerMatch.ts.
 export interface DecompositionSummary {
   total: number;
   assumptions: number;
   verifiable: number;
   computational: number;
+  normalized_source: string;
   steps: Step[];
 }
 

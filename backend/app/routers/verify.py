@@ -5,10 +5,14 @@ Runs the real LaTeX validator (§4a) and the real Claude decompose/formalize
 malformed Claude response, network error) that's a `pipeline_error` SSE
 event — distinct from the 422 ingest error, since validation already
 passed; this is a downstream failure, not a bad-input one.
+
+No PDF/rendering concerns here — /api/compile (routers/compile.py) owns
+compilation, and highlight-box geometry is computed entirely client-side by
+matching each step's source_span against the compiled PDF's own text layer
+(frontend/src/textLayerMatch.ts), not by anything in this pipeline.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -21,8 +25,6 @@ from ..models.schema import Classification, DecompositionSummary, Step, VerifyRe
 from ..pipeline.advisory import run_advisory_pass
 from ..pipeline.real_pipeline import decompose_steps, run_verification
 from ..pipeline.report import build_report
-from ..rendering.latex_compiler import CompiledDoc, CompileFailure, compile_document
-from ..rendering.synctex_lookup import boxes_for_span, deoverlap_boxes
 from ..validation.latex_validator import LatexValidator
 
 router = APIRouter()
@@ -32,19 +34,6 @@ _logger = logging.getLogger(__name__)
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-async def _attach_pdf_boxes(step: Step, compiled_doc: CompiledDoc | None) -> None:
-    if compiled_doc is None:
-        return
-    try:
-        boxes = await asyncio.to_thread(
-            boxes_for_span, compiled_doc, step.source_span.start, step.source_span.end
-        )
-        if boxes:
-            step.pdf_boxes = boxes
-    except Exception:  # noqa: BLE001 - a rendering lookup must never break verification
-        _logger.exception("SyncTeX box lookup failed for step %s", step.id)
 
 
 def _tally(steps: list[Step]) -> tuple[int, int, int]:
@@ -64,19 +53,6 @@ async def verify(request: VerifyRequest):
         for repair in result.auto_repairs:
             yield _sse("auto_repair", repair.model_dump())
 
-        # PDF compilation is a rendering nicety, not a pipeline requirement —
-        # a compile failure (e.g. an exotic package) must never block
-        # verification itself. Same request.latex, same content-hash cache
-        # /api/compile would have already populated if the frontend called
-        # it during the preview step, so this is normally a cache hit.
-        compiled_doc = None
-        try:
-            compile_result = await asyncio.to_thread(compile_document, request.latex)
-            if not isinstance(compile_result, CompileFailure):
-                compiled_doc = compile_result
-        except Exception:  # noqa: BLE001 - rendering must never break verification
-            _logger.exception("PDF compilation failed unexpectedly during verify")
-
         try:
             steps = await decompose_steps(result.normalized_source)
         except ClaudeNotConfiguredError as exc:
@@ -87,14 +63,6 @@ async def verify(request: VerifyRequest):
             yield _sse("pipeline_error", {"message": f"Pipeline failed: {exc}"})
             return
 
-        # Computed once, immediately, on the true full step list — not
-        # per-step later — so both the decomposition event below and every
-        # subsequent `step` event (same Step objects, mutated in place by
-        # run_verification) already carry pdf_boxes from the start.
-        for step in steps:
-            await _attach_pdf_boxes(step, compiled_doc)
-        deoverlap_boxes(steps)
-
         assumptions, verifiable, computational = _tally(steps)
         yield _sse(
             "decomposition",
@@ -103,6 +71,7 @@ async def verify(request: VerifyRequest):
                 assumptions=assumptions,
                 verifiable=verifiable,
                 computational=computational,
+                normalized_source=result.normalized_source,
                 steps=steps,
             ).model_dump(),
         )
