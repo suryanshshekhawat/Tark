@@ -122,6 +122,13 @@ class SympyVerifier(Verifier):
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    # See lean_verifier.py: without this, Windows decodes
+                    # subprocess output with the cp1252 locale encoding
+                    # instead of UTF-8, which can crash mid-read on
+                    # non-cp1252 output (e.g. a traceback quoting Unicode
+                    # from the user's proof).
+                    encoding="utf-8",
+                    errors="replace",
                 )
             except subprocess.TimeoutExpired:
                 return VerdictResult(

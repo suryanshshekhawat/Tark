@@ -8,7 +8,9 @@ or SymPy execution can produce a VERIFIED/REFUTED verdict. Anything else is
 UNVERIFIED. Don't violate this anywhere, including in error-handling paths.
 
 Stack: FastAPI backend (backend/), React+Vite frontend (frontend/),
-Lean 4 + Mathlib project at tark_lean/.
+Lean 4 + Mathlib project at tark_lean/, and the Lean strategy cookbook at
+lean_cookbook/ (read lean_cookbook/README.md before touching Lean
+formalization patterns — see the Conventions entry below).
 
 Conventions:
 - Steps are identified "S1", "S2", ... in proof order (assigned by Claude during
@@ -76,21 +78,33 @@ Conventions:
   `taskkill /F /T /PID` (see `_kill_process_tree`), not `proc.kill()` — `lake`
   spawns `lean.exe` as a child rather than exec'ing into it, so a plain kill
   leaves `lean.exe` running indefinitely, still holding CPU/memory.
-- `formalize.py`'s `LEAN_SYSTEM_PROMPT` includes a small cookbook of Lean
-  snippets hand-verified against this exact Mathlib pin (parity of squares,
-  unpacking `Even`, gcd-of-two-evens, algebraic substitution). This is the
-  single highest-leverage fix found so far: on the sqrt(2) demo proof, the
-  Lean-candidate verification rate went from 0/10 (general import/tactic
-  guidance only) to 7/8 (with the cookbook) — most steps VERIFIED on the
-  *first* attempt, no repair needed. Root cause of the failures wasn't the
-  math being hard, it was recoverable mistakes (`ring_nf` needs
-  `Mathlib.Tactic.Ring`, `norm_num` needs `Mathlib.Tactic.NormNum`, `omega`
-  needs no import at all, a step mixing gcd+parity needs both imports
-  together) — Claude's training data is unreliable on exactly this kind of
-  precise, frequently-reorganized Mathlib bookkeeping, even for "obvious"
-  facts. If a class of steps keeps failing, verify a working snippet
-  directly against `tark_lean/` (`lake env lean <file>.lean`) and add it to
-  the cookbook — don't just tweak prose guidance and hope.
+- The Lean cookbook (worked, hand-verified example proofs injected into the
+  formalization prompt) is the single highest-leverage fix found so far: on
+  the sqrt(2) demo proof, the Lean-candidate verification rate went from
+  0/10 (general import/tactic guidance only) to 7/8 (with the cookbook) —
+  most steps VERIFIED on the *first* attempt, no repair needed. Root cause
+  of the failures wasn't the math being hard, it was recoverable mistakes
+  (`ring_nf` needs `Mathlib.Tactic.Ring`, `norm_num` needs
+  `Mathlib.Tactic.NormNum`, `omega` needs no import at all, a step mixing
+  gcd+parity needs both imports together) — Claude's training data is
+  unreliable on exactly this kind of precise, frequently-reorganized
+  Mathlib bookkeeping, even for "obvious" facts. If a class of steps keeps
+  failing, verify a working snippet directly against `tark_lean/`
+  (`lake env lean <file>.lean`) and add it to the cookbook — don't just
+  tweak prose guidance and hope.
+  **As of a later session, the cookbook is no longer inline in
+  `formalize.py`** — it moved to `lean_cookbook/` (one Markdown file per
+  pattern, organized by mathematical branch/subtopic) specifically so it
+  can grow to hundreds of patterns without becoming an unreadable Python
+  string. `formalize.py` now only calls
+  `cookbook_loader.build_lean_system_prompt()`, which assembles the prompt
+  from those files at import time. **Read `lean_cookbook/README.md` before
+  adding, editing, or reasoning about any pattern** — it's the authoritative
+  spec for the file format, the required "test against `tark_lean/` first,
+  then run `test_cookbook_patterns.py`" workflow, and the directory
+  conventions for keeping hundreds of patterns navigable. Don't write Lean
+  code inside `formalize.py` again; if you find yourself doing that, stop
+  and put it in `lean_cookbook/` instead.
 - Real-number steps (`Real.sqrt` etc.) were initially treated as an accepted
   timeout case — turned out to be wrong. Isolated the cost by timing
   `import Mathlib.Analysis.Real.Sqrt` against a *trivial* goal: ~25s, with the
@@ -98,8 +112,9 @@ Conventions:
   not proof difficulty, so the fix was raising `DEFAULT_TIMEOUT` to 45s
   (`lean_verifier.py`) and pointing the prompt at the correct minimal import
   (`Mathlib.Analysis.Real.Sqrt`, not `Mathlib.Analysis.SpecialFunctions.Sqrt`,
-  which doesn't reliably resolve at that path) — see cookbook pattern 5 in
-  `formalize.py`. Lesson: before accepting a timeout as "structurally too
+  which doesn't reliably resolve at that path) — see
+  `lean_cookbook/number-theory/irrationality/squaring-sqrt-equation.md`.
+  Lesson: before accepting a timeout as "structurally too
   hard," isolate whether it's actually import cost vs. proof-search cost by
   testing the import alone against a trivial goal — they need very different
   fixes (a longer/no timeout vs. a fundamentally different approach).
@@ -150,3 +165,56 @@ Conventions:
   Docker is confirmed available on this machine if/when it's picked back up;
   the hard part will be baking tark_lean/'s Mathlib `.lake` cache (thousands
   of `.olean` files) into an image without a multi-GB, multi-minute build.
+- `Settings.model_config`'s `env_file=".env"` was a relative path, resolved
+  against the process's cwd at import time — fine when uvicorn is launched
+  from inside `backend/` by hand, but silently broken (empty
+  `anthropic_api_key`, `ClaudeNotConfiguredError` even with a real key in the
+  file) when launched from anywhere else, e.g. `uvicorn ... --app-dir
+  backend` from the repo root. Fixed by resolving `_ENV_FILE` relative to
+  `config.py`'s own location (`Path(__file__).resolve().parent.parent /
+  ".env"`) instead — cwd-independent, works regardless of launch directory.
+- Long/complex inputs occasionally make Claude's forced tool-use double-encode
+  a large array field as a JSON *string* instead of native JSON —
+  `{"steps": "[...]"}` instead of `{"steps": [...]}` — inside
+  `record_decomposition`'s `tool_use.input`. Live-captured for the first time
+  via a debug log on the empty-steps path (see `decompose.py`): Claude's
+  decomposition was correct and complete (24-27 well-formed steps every
+  time) but got discarded as "returned no steps" because `raw_steps` was a
+  `str`, not a `list`. This is what "decomposition keeps failing" turned out
+  to actually be, on real multi-page academic LaTeX input — the short demo
+  proofs from the previous session never hit it because it's specific to
+  large `steps` arrays. Fixed in `_decompose_once`: if `tool_use.input["steps"]`
+  is a `str`, `json.loads()` it and unwrap before falling through to the
+  empty-steps error. Confirmed NOT caused by `\[...\]`-style display-math
+  LaTeX (a hypothesis raised mid-session) — a 22-step Wilson's-theorem proof
+  full of `\[...\]` blocks decomposed with zero steps dropped once this fix
+  landed.
+- `LeanVerifier.check()`'s `subprocess.Popen(..., text=True)` and
+  `SympyVerifier.check()`'s `subprocess.run(..., text=True)` both omitted an
+  explicit `encoding=`, so on Windows Python decoded subprocess output with
+  the OS locale codec (`cp1252`) instead of UTF-8. Lean/Mathlib output is
+  full of Unicode math notation (⊢, ¬, ∀, ≠, …) that `cp1252` can't
+  represent — this crashed `Popen.communicate()`'s internal reader thread
+  mid-read on nearly every Lean check (`UnicodeDecodeError` in
+  `_readerthread`, visible in server logs, not raised to the caller), so
+  `evidence.raw_output` was truncated right at the corrupting character
+  instead of raising or degrading cleanly. A verdict computed from
+  `proc.returncode` alone was still correct, but the diagnostic text used for
+  cookbook-driven repair (§ "Priority 1" in HANDOFF.md-style sessions) was
+  silently incomplete for basically every Mathlib-heavy check on Windows.
+  Fixed by passing `encoding="utf-8", errors="replace"` explicitly on both
+  `Popen`/`run` calls.
+- Lean's `!` postfix factorial notation (`n !`) is declared `scoped` inside
+  `namespace Nat` — it does not parse in a standalone single-theorem file
+  that never has `open Nat` (which the Lean-formalization prompt's generated
+  files never do). Use `Nat.factorial n` instead; confirmed both forms
+  directly against `tark_lean/` before adding the factorial-related
+  patterns now at `lean_cookbook/number-theory/factorials/` (see that
+  directory's move out of `formalize.py` noted above).
+- The prime-squared-divides-factorial pattern (two distinct multiples of the
+  prime both being ≤ the factorial's argument) needed one non-obvious step:
+  don't `rw` an equation like `2 * p = (2 * p - 1) + 1` in place —
+  `2 * p - 1` still textually contains `2 * p`, so the rewrite doesn't
+  normalize cleanly. `obtain ⟨q, hq⟩ : ∃ q, 2 * p = q + 1 := ...` first, to
+  get a fresh opaque variable with no self-reference, then rewrite with
+  that.

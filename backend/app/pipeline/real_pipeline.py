@@ -39,6 +39,17 @@ _sympy_verifier = SympyVerifier()
 # timing out with this lower limit, the fix is freeing memory / reducing this
 # further, not touching the formalization prompt — the failure is
 # infrastructure contention, not formalization quality. See CLAUDE.md.
+#
+# Reconfirmed in a later session, worse: a 15-lean_candidate-step proof
+# produced 4/20 verified with free RAM at just 0.6GB (Get-CimInstance
+# Win32_OperatingSystem), and every failure's evidence was an *empty*
+# timeout with no partial stdout/stderr at all — the classic signature of
+# contention, not a compile error. `Get-Process | sort WorkingSet64 -desc`
+# showed several multi-GB Chrome processes as the dominant consumer. Before
+# concluding the cookbook needs more/better patterns after a bad run, check
+# free memory first — a pattern independently confirmed to compile in ~15s
+# alone can still show UNVERIFIED here for reasons that have nothing to do
+# with the pattern.
 _LEAN_CONCURRENCY_LIMIT = 2
 _lean_semaphore = asyncio.Semaphore(_LEAN_CONCURRENCY_LIMIT)
 

@@ -18,7 +18,7 @@ from .base import Verifier, VerdictResult
 LEAN_PROJECT_DIR = Path(__file__).resolve().parents[3] / "tark_lean"
 SCRATCH_DIR = LEAN_PROJECT_DIR / ".tark_scratch"
 
-DEFAULT_TIMEOUT = 45.0  # seconds — see notes below for why this is above §8.2's 20-30s suggestion
+DEFAULT_TIMEOUT = 90.0  # seconds — see notes below for why this is above §8.2's 20-30s suggestion
 
 # `import Mathlib` (the whole library) takes 50s+ per cold subprocess even
 # with the prebuilt .olean cache — it blows the timeout above. Formalization
@@ -31,15 +31,23 @@ DEFAULT_TIMEOUT = 45.0  # seconds — see notes below for why this is above §8.
 # expect the first check after a backend restart to be noticeably slower
 # than subsequent ones.
 #
-# §8.2 suggests 20-30s; this is intentionally higher. Measured directly:
+# §8.2 suggests 20-30s; this is intentionally higher, and was raised a
+# second time in a later session. Measured directly:
 # `import Mathlib.Analysis.Real.Sqrt` alone (proved by testing it against a
 # *trivial* goal, isolating import cost from proof cost) takes ~25s warm on
-# this environment — the tactics on top of it cost almost nothing. A 30s cap
-# would make every Real-number step time out regardless of whether the
-# formalization is correct, which isn't "genuinely too hard to verify", it's
-# "the timeout is shorter than baseline import cost." 45s gives real-analysis
-# steps (rare, but they do occur — e.g. squaring a sqrt(2) = p/q equation)
-# enough room while still bounding the worst case.
+# this environment. `import Mathlib.FieldTheory.Finite.Basic` (needed for
+# ZMod-field facts — self-inverse/unique-inverse patterns, and transitively
+# `Mathlib.NumberTheory.Wilson`) is far heavier: measured at 58s warm and
+# 3m10s when the OS file cache was under memory pressure (0.6GB free RAM at
+# the time — see CLAUDE.md's concurrency/memory note; this is the same
+# failure mode, just from a different heavy import than Real.sqrt). A short
+# cap makes every step using these imports time out regardless of whether
+# the formalization is correct — that isn't "genuinely too hard to verify",
+# it's "the timeout is shorter than baseline import cost." Raised from 45s
+# to 90s to give these steps a realistic chance under normal (non-memory-
+# starved) conditions; still not enough under severe memory pressure, which
+# needs a different fix (free memory / lower _LEAN_CONCURRENCY_LIMIT), not
+# an ever-larger timeout — see real_pipeline.py.
 
 
 def _kill_process_tree(pid: int) -> None:
@@ -92,6 +100,16 @@ class LeanVerifier(Verifier):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # Without an explicit encoding, Popen falls back to the OS
+            # locale encoding — cp1252 on Windows, which can't decode the
+            # Unicode math notation Lean/Mathlib output is full of (⊢, ¬,
+            # ∀, ≠, ...). That silently crashed the internal reader thread
+            # mid-read on every such check, truncating stdout/stderr right
+            # where the corrupting character appeared. errors="replace" is
+            # a defensive fallback, not the primary fix — Lean's output is
+            # UTF-8.
+            encoding="utf-8",
+            errors="replace",
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
