@@ -59,16 +59,22 @@ function AttemptDots({
 }: {
   step: Step;
   resolved: boolean;
-  /** Verdict of each attempt so far, in order, as `step_attempt` SSE events
-   * arrive live — lets a dot turn red the moment that attempt fails, rather
-   * than only learning the whole history at once when the step resolves. */
+  /** Verdict of each attempt so far, in order, across this step's whole
+   * lifetime (the initial run plus every retry since — see App.tsx's
+   * attemptOffsetRef) as `step_attempt` SSE events arrive live. Lets a dot
+   * turn red the moment that attempt fails, rather than only learning the
+   * whole history at once when the step resolves. Can grow past DOT_COUNT
+   * after enough retries — shown as a sliding window of the most recent
+   * DOT_COUNT attempts, so the dots always reflect current status instead
+   * of freezing once the original run's slots first fill up. */
   history?: Verdict[];
 }) {
   let dots: DotColor[];
   if (history && history.length > 0) {
+    const visible = history.length > DOT_COUNT ? history.slice(history.length - DOT_COUNT) : history;
     dots = [];
     for (let i = 0; i < DOT_COUNT; i++) {
-      dots.push(i < history.length ? (history[i] === "VERIFIED" ? "green" : "red") : "grey");
+      dots.push(i < visible.length ? (visible[i] === "VERIFIED" ? "green" : "red") : "grey");
     }
   } else if (resolved) {
     dots = attemptDotsFromFinal(step);

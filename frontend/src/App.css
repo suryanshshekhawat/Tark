@@ -291,6 +291,29 @@
   cursor: pointer;
 }
 
+.retry-all-btn {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--refuted);
+  background: var(--refuted-bg);
+  color: var(--refuted);
+  cursor: pointer;
+}
+
+.retry-all-btn:hover:not(:disabled) {
+  background: var(--refuted);
+  color: #fff;
+}
+
+.retry-all-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ---------- paper (paginated latex viewer) ---------- */
 
 .paper {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import "./App.css";
 import { compiledPdfUrl, compileLatex, streamRetryStep, streamVerify } from "./api";
 import { PdfPaperViewer } from "./components/PdfPaperViewer";
@@ -76,18 +76,30 @@ function App() {
   const [focusOrigin, setFocusOrigin] = useState<FocusOrigin>(null);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   // Per-step live attempt history — verdict of each attempt so far, in
-  // order, filled in as `step_attempt` events arrive (both during the
-  // initial run and during a retry). Distinct from `formalization.attempts`
-  // on Step, which is just a final count with no per-attempt outcomes.
+  // order, filled in as `step_attempt` events arrive across the step's whole
+  // lifetime (the initial run *and* every subsequent retry, not reset back
+  // to empty each time). Distinct from `formalization.attempts` on Step,
+  // which is just the last run's count with no per-attempt outcomes.
   const [attemptHistory, setAttemptHistory] = useState<Map<string, Verdict[]>>(new Map());
+  // The backend numbers attempts 1..N *within* whichever run produced them —
+  // a retry's own attempt 1 is unrelated to the original run's attempt 1.
+  // This tracks, per step, how many attempts were already recorded before
+  // the run currently in flight started, so a retry's events land *after*
+  // the existing history instead of overwriting it at the same array index
+  // (which was the bug: dots looked "stuck at 3" no matter how many times a
+  // step was retried, because each retry's attempt-1..3 kept clobbering the
+  // same three slots instead of continuing on). A plain ref, not state — it
+  // isn't itself rendered, only used to compute where recordAttempt writes.
+  const attemptOffsetRef = useRef<Map<string, number>>(new Map());
 
   const sortedSteps = useMemo(() => sortSteps(steps), [steps]);
 
   function recordAttempt(a: StepAttempt) {
     setAttemptHistory((prev) => {
       const next = new Map(prev);
+      const offset = attemptOffsetRef.current.get(a.step_id) ?? 0;
       const arr = [...(next.get(a.step_id) ?? [])];
-      arr[a.attempt - 1] = a.verdict;
+      arr[offset + a.attempt - 1] = a.verdict;
       next.set(a.step_id, arr);
       return next;
     });
@@ -142,6 +154,7 @@ function App() {
     setPipelineError(null);
     setFocusedStepId(null);
     setAttemptHistory(new Map());
+    attemptOffsetRef.current = new Map();
 
     try {
       await streamVerify(latex, {
@@ -189,15 +202,11 @@ function App() {
     const step = steps.find((s) => s.id === id);
     if (!step || retryingIds.has(id)) return;
     setRetryingIds((prev) => new Set(prev).add(id));
-    // Clear this step's attempt-history dots back to empty (not deleted —
-    // an empty array still means "no attempts yet" so dots render all-grey)
-    // so a retry's attempts are colored in fresh, not appended after the
-    // original run's history.
-    setAttemptHistory((prev) => {
-      const next = new Map(prev);
-      next.set(id, []);
-      return next;
-    });
+    // This retry's own attempt numbering starts back at 1 on the backend —
+    // record how many attempts are already in this step's history so far,
+    // so recordAttempt appends after them instead of overwriting from the
+    // start (see attemptOffsetRef's comment above).
+    attemptOffsetRef.current.set(id, attemptHistory.get(id)?.length ?? 0);
 
     let finalStep: Step | null = null;
     try {
@@ -234,6 +243,29 @@ function App() {
         return next;
       });
     }
+  }
+
+  // Resolved (not still-pending) lean_candidate/computational steps whose
+  // final verdict was REFUTED/UNVERIFIED — the same "did this fail and can
+  // it be retried" test StatementCard uses per-card, computed once here so
+  // a top-of-page "retry all failed" button knows whether to show up at all
+  // without the user having to scroll down and check each card themselves.
+  const failedAttemptableIds = useMemo(
+    () =>
+      sortedSteps
+        .filter(
+          (s) =>
+            (s.verdict === "REFUTED" || s.verdict === "UNVERIFIED") &&
+            (s.classification === "lean_candidate" || s.classification === "computational") &&
+            resolvedIds.has(s.id),
+        )
+        .map((s) => s.id),
+    [sortedSteps, resolvedIds],
+  );
+
+  async function handleRetryAll() {
+    const idsToRetry = failedAttemptableIds.filter((id) => !retryingIds.has(id));
+    await Promise.all(idsToRetry.map((id) => handleRetry(id)));
   }
 
   function handleBackToLanding() {
@@ -335,6 +367,17 @@ function App() {
               onFocus={focusFromSource}
             />
             <div className="side-panel">
+              {failedAttemptableIds.length > 0 && !ingestError && !pipelineError && (
+                <button
+                  type="button"
+                  className="retry-all-btn"
+                  onClick={handleRetryAll}
+                  disabled={failedAttemptableIds.every((id) => retryingIds.has(id))}
+                >
+                  ↻ Retry all failed ({failedAttemptableIds.length})
+                </button>
+              )}
+
               {ingestError && (
                 <div className="ingest-error">
                   <div className="ingest-error-type">{ingestError.error_type}</div>

@@ -62,6 +62,26 @@ original text.
 Decompose the whole proof. Do not skip steps, and do not merge unrelated claims into one \
 step just because they're adjacent.
 
+The input may open with a formal goal statement — a `\\begin{theorem}`/`\\begin{proposition}`/\
+`\\begin{lemma}`/`\\begin{corollary}` environment (or an equivalent stated goal immediately \
+before a `\\begin{proof}` block) naming the overall claim the rest of the document exists to \
+establish. Do NOT decompose that goal statement into a step of its own. It is the conclusion \
+the proof steps below build up to piece by piece, not itself an atomic claim to hand to a \
+verifier — asking Lean/SymPy to check the *entire* theorem in one shot is exactly the kind of \
+oversized claim decomposition exists to avoid, and it would also be circular: the goal restated \
+as a "step" adds nothing the actual proof steps don't already establish individually. Skip \
+straight to decomposing the proof body itself (everything inside `\\begin{proof}...\\end{proof}`, \
+or the argument that follows if the input never restates the goal as a separate step outside the \
+proof — many short proofs given to Tark aren't structured with an explicit theorem/proof \
+environment at all, and in that case there is no separate goal statement to skip: decompose \
+normally starting from the first sentence). This applies per theorem if a document restates the \
+goal more than once (e.g. a theorem statement followed later by "we must show X" restating the \
+same goal inside the proof) — none of those restatements are themselves a step; only decompose \
+the actual reasoning that establishes them. If the theorem is an "if and only if" or otherwise \
+has multiple named directions/cases (e.g. "($\\Rightarrow$)" and "($\\Leftarrow$)"), decompose \
+each direction's argument in sequence as its own run of steps — still never as a single step for \
+the direction's own restated sub-goal.
+
 The input may be a real, messy excerpt from a paper — bibliography commands, section/\
 appendix headers, citations, custom formatting macros, multiple independent theorems and \
 proofs in sequence. Handle this explicitly:
